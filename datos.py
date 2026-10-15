@@ -6,6 +6,11 @@ import time
 import numpy as np
 import pandas as pd
 
+# yfinance (y con él curl_cffi) se carga antes que TensorFlow. En Linux, si TensorFlow se carga primero,
+# curl_cffi termina usando la libcurl de TensorFlow y la descarga falla con
+# "Impersonating chromeXXX is not supported".
+import yfinance as yf
+
 import config
 
 COLUMNAS = ["Open", "High", "Low", "Close", "Volume"]
@@ -124,8 +129,6 @@ def guardar_local(df, ticker, intervalo):
 
 
 def descargar(ticker, intervalo, inicio, fin=None):
-    import yfinance as yf
-
     crudo = yf.Ticker(ticker).history(
         interval=intervalo,
         start=inicio,
@@ -162,7 +165,7 @@ def actualizar(ticker, intervalo):
 
     if nuevo.empty:
         if local.empty:
-            return local, f"Yahoo no devolvió datos para {ticker} ({intervalo}). Revisa que el símbolo exista."
+            return local, f"Yahoo no devolvió datos para {ticker} ({intervalo}). Es posible que el símbolo no exista."
         return local, None
 
     if local.empty:
