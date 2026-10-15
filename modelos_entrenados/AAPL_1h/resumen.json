@@ -1,0 +1,86 @@
+{
+  "ticker": "AAPL",
+  "intervalo": "1h",
+  "entrenado_en": "2026-09-30 21:52",
+  "caracteristicas": [
+    "log_ret",
+    "rango",
+    "vol_rel"
+  ],
+  "velas": 3416,
+  "tramos": {
+    "entrenamiento": {
+      "desde": "2024-10-11 15:30",
+      "hasta": "2026-03-03 12:30",
+      "velas": 2391
+    },
+    "validacion": {
+      "desde": "2026-03-03 13:30",
+      "hasta": "2026-06-16 13:30",
+      "velas": 512
+    },
+    "prueba": {
+      "desde": "2026-06-16 14:30",
+      "hasta": "2026-09-30 14:30",
+      "velas": 512
+    }
+  },
+  "validacion_cruzada": {
+    "pliegues": 3,
+    "tramos": [
+      {
+        "entrena_hasta": "2025-03-17 15:30",
+        "valida_desde": "2025-03-18 09:30",
+        "valida_hasta": "2025-08-15 09:30"
+      },
+      {
+        "entrena_hasta": "2025-08-15 09:30",
+        "valida_desde": "2025-08-15 10:30",
+        "valida_hasta": "2026-01-14 14:30"
+      },
+      {
+        "entrena_hasta": "2026-01-14 14:30",
+        "valida_desde": "2026-01-14 15:30",
+        "valida_hasta": "2026-06-16 13:30"
+      }
+    ]
+  },
+  "ar": {
+    "p": 1,
+    "intercepto": 9.050374088559979e-05,
+    "coeficientes": [
+      0.03093038012547684
+    ]
+  },
+  "prophet": {
+    "changepoint_prior_scale": 0.3,
+    "seasonality_prior_scale": 0.1,
+    "reajuste_cada_velas": 7
+  },
+  "redes": {
+    "rnn": {
+      "ventana": 7,
+      "unidades": 32,
+      "capas": 1,
+      "dropout": 0.2,
+      "tasa": 0.001,
+      "rmse_cv_pct": 0.6611436138120614,
+      "desv_pliegues_pct": 0.15829373102110755,
+      "epocas_promedio": 6.333333333333333,
+      "parametros": 1185,
+      "epocas_finales": 6
+    },
+    "lstm": {
+      "ventana": 7,
+      "unidades": 32,
+      "capas": 1,
+      "dropout": 0.2,
+      "tasa": 0.001,
+      "rmse_cv_pct": 0.6588935259672666,
+      "desv_pliegues_pct": 0.16325907578653576,
+      "epocas_promedio": 2.0,
+      "parametros": 4641,
+      "epocas_finales": 2
+    }
+  }
+}
