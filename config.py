@@ -3,9 +3,11 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent
 DIR_DATOS = RAIZ / "datos"
 DIR_MODELOS = RAIZ / "modelos_entrenados"
+DIR_BASE_LOCAL = RAIZ / "base_datos"
+RUTA_BASE_LOCAL = DIR_BASE_LOCAL / "usuarios.db"
+RUTA_CLAVE_LOCAL = DIR_BASE_LOCAL / "clave_local.txt"
 
 TICKER_POR_DEFECTO = "AAPL"
-TICKERS_SUGERIDOS = ["AAPL", "MSFT", "NVDA", "SPY", "EC"]
 
 INTERVALO_MODELO = "1h"
 INTERVALO_VIVO = "2m"
@@ -44,19 +46,49 @@ REJILLA_REDES = {
     "unidades": [32, 64],
     "capas": [1, 2],
     "dropout": [0.2],
-    "tasa": [1e-3],
+    "tasa": [0.01, 0.05, 0.1],
 }
 REJILLA_REDES_RAPIDA = {
     "ventana": [7, 14],
     "unidades": [32],
     "capas": [1],
     "dropout": [0.2],
-    "tasa": [1e-3],
+    "tasa": [0.05],
 }
+SMA_RAPIDA = 20
+SMA_LENTA = 50
+RSI_PERIODO = 14
+RSI_COMPRA = 30
+RSI_VENTA = 70
+COSTO_OPERACION_PCT = 0.05
+VELAS_POR_ANO = 7 * 252
+
+GEMINI_MODELOS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+
+NOMBRE_APP = "Predicción de acciones"
+CORREO_CONTACTO = "[correo del equipo]"
+RESPONSABLE_CONSULTAS = "[nombre del integrante encargado]"
+VERSION_POLITICA = "2026-10-20"
+
+SALDO_INICIAL = 10_000.0
+COMISION_SIMULADA_PCT = 0.1
+PRECIO_MAX_ANTIGUEDAD_MIN = 10
+CANTIDAD_MAXIMA_OPERACION = 100_000
+
+INTENTOS_MAXIMOS = 5
+MINUTOS_BLOQUEO = 15
+MINUTOS_SESION = 30
+CONTRASENA_MINIMA = 8
+
+AGENTE_CONSULTAS_DIARIAS = 20
+AGENTE_MAX_CARACTERES = 500
+AGENTE_MENSAJES_HISTORIAL = 20
+
 EPOCAS = 100
 PACIENCIA = 10
 TAMANO_LOTE = 32
-TASA_APRENDIZAJE = 1e-3
+OPTIMIZADOR = "SGD"
+TASA_APRENDIZAJE = 0.05
 SEMILLA = 42
 
 

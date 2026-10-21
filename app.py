@@ -1,4 +1,4 @@
-"""Dashboard de predicción de acciones.  Ejecutar con:  streamlit run app.py"""
+"""Dashboard de predicción de acciones.  Ejecutar con:  python -m streamlit run app.py"""
 
 import os
 
@@ -9,14 +9,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import agente
 import config
 import datos
+import estrategias
+import interfaz_agente
+import interfaz_cuenta
 import modelos_series
+import portafolio as portafolio_simulado
 import prediccion
 import preparacion
 import varias_horas
 
-st.set_page_config(page_title="Predicción de acciones", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Predicción de acciones", layout="wide")
 
 INTERVALO = config.INTERVALO_MODELO
 VIVO = config.INTERVALO_VIVO
@@ -91,6 +96,20 @@ def prophet_ajustado(ticker, intervalo, ultima_iso, ajuste, incertidumbre=True):
     return modelos_series.ajustar_prophet(serie, dict(ajuste), incertidumbre=incertidumbre)
 
 
+@st.cache_data(show_spinner=False, max_entries=12)
+def prediccion_siguiente(ticker, intervalo, ultima_iso, ajuste, version, _arts):
+    completas = completas_hasta(ticker, intervalo, ultima_iso)
+    modelo = prophet_ajustado(ticker, intervalo, ultima_iso, ajuste)
+    return prediccion.predecir_siguiente(completas, intervalo, _arts, modelo)
+
+
+@st.cache_data(show_spinner="Simulando las estrategias…", max_entries=24)
+def backtest_estrategias(ticker, intervalo, ultima_iso, costo_pct, umbral_pct, version, _arts):
+    completas = completas_hasta(ticker, intervalo, ultima_iso)
+    predicciones = pd.read_csv(_arts["carpeta"] / "predicciones_prueba.csv") if _arts else None
+    return estrategias.backtest(completas["Close"], predicciones, costo_pct, umbral_pct)
+
+
 @st.cache_data(show_spinner="Pronosticando varias horas…", max_entries=24)
 def pronostico_varias_horas(ticker, intervalo, origen_iso, horas, ajuste, version, _arts):
     completas = completas_hasta(ticker, intervalo, origen_iso)
@@ -160,37 +179,48 @@ def ajuste_prophet(arts):
     return tuple(sorted(modelos_series.parametros_prophet(elegidos).items()))
 
 
+def tickers_con_modelos():
+    return sorted(carpeta.name.rsplit("_", 1)[0] for carpeta in config.DIR_MODELOS.glob(f"*_{INTERVALO}")
+                  if (carpeta / "resumen.json").exists())
+
+
+def cotizacion_para(simbolo):
+    df_2m, _ = obtener(simbolo, VIVO)
+    return portafolio_simulado.cotizacion(df_2m)
+
+
+def prediccion_para(simbolo):
+    """(tabla de predicciones, info, consenso) de la próxima vela de 1 hora con los modelos de `simbolo`."""
+    arts_simbolo = artefactos_de(simbolo)
+    df_simbolo, _ = obtener(simbolo, INTERVALO)
+    if not arts_simbolo or df_simbolo.empty:
+        return pd.DataFrame(), None, None
+    ultima = datos.velas_completas(df_simbolo, INTERVALO).index[-1].isoformat()
+    tabla, info = prediccion_siguiente(simbolo, INTERVALO, ultima, ajuste_prophet(arts_simbolo),
+                                       arts_simbolo["resumen"]["entrenado_en"], arts_simbolo)
+    return tabla, info, prediccion.consenso(tabla)
+
+
+def series_para(simbolo):
+    return [obtener(simbolo, VIVO)[0], obtener(simbolo, INTERVALO)[0]]
+
+
 # ------------------------------------------------------------------ barra lateral
 
 st.sidebar.header("Acción")
-opciones = config.TICKERS_SUGERIDOS + ["Otra…"]
-eleccion = st.sidebar.selectbox("Símbolo", opciones, index=opciones.index(config.TICKER_POR_DEFECTO))
-if eleccion == "Otra…":
-    ticker = st.sidebar.text_input("Símbolo en Yahoo Finance", "TSLA").strip().upper()
-else:
-    ticker = eleccion
+opciones = tickers_con_modelos() or [config.TICKER_POR_DEFECTO]
+ticker = st.sidebar.selectbox(
+    "Símbolo", opciones,
+    index=opciones.index(config.TICKER_POR_DEFECTO) if config.TICKER_POR_DEFECTO in opciones else 0,
+    help="Solo aparecen las acciones con modelos entrenados. Una acción nueva aparece cuando se entrena con "
+         "entrenar.py --ticker SÍMBOLO.",
+)
 
 en_vivo = st.sidebar.toggle("Actualizar en vivo", value=True,
                             help=f"Consulta Yahoo Finance cada {config.SEGUNDOS_ACTUALIZACION // 60} minutos.")
 if st.sidebar.button("Actualizar ahora"):
     obtener.clear()
     st.rerun()
-
-with st.sidebar.expander("Buscar un símbolo"):
-    consulta = st.text_input("Nombre de la empresa", placeholder="ecopetrol, apple, bancolombia…")
-    if consulta:
-        try:
-            import yfinance as yf
-
-            resultados = yf.Search(consulta, max_results=8).quotes
-            st.dataframe(pd.DataFrame([{
-                "símbolo": r.get("symbol"),
-                "nombre": r.get("shortname") or r.get("longname"),
-                "bolsa": r.get("exchDisp") or r.get("exchange"),
-                "tipo": r.get("typeDisp") or r.get("quoteType"),
-            } for r in resultados]), hide_index=True)
-        except Exception as error:
-            st.caption(f"No se pudo buscar: {error}")
 
 arts = artefactos_de(ticker)
 if arts:
@@ -199,11 +229,14 @@ else:
     st.sidebar.warning("Esta acción no tiene modelos entrenados. Por ahora solo se muestra Prophet.")
     st.sidebar.code(f"python entrenar.py --ticker {ticker}", language="bash")
 
+usuario = interfaz_cuenta.sesion()
+interfaz_cuenta.barra_lateral(usuario)
+
 # ------------------------------------------------------------------ encabezado
 
 ahora = datos.ahora_mercado()
-estado = "🟢 Mercado abierto" if datos.mercado_abierto(ahora) else "⚪ Mercado cerrado"
-st.title(f"📈 {ticker}")
+estado = "Mercado abierto" if datos.mercado_abierto(ahora) else "Mercado cerrado"
+st.title(ticker)
 st.caption(f"{estado} · {ahora:%H:%M} en Nueva York · {ahora.tz_convert(config.ZONA_USUARIO):%H:%M} en Bogotá · "
            "la bolsa de EE. UU. opera de 9:30 a 16:00, hora de Nueva York")
 
@@ -215,9 +248,10 @@ if error_hora:
     st.warning(error_hora)
 ultima_iso = datos.velas_completas(df_hora, INTERVALO).index[-1].isoformat()
 
-tab_vivo, tab_horas, tab_prophet, tab_serie, tab_eval, tab_datos = st.tabs(
-    ["En vivo y próxima hora", "Varias horas", "Prophet", "Análisis de la serie", "Evaluación de modelos",
-     "Datos recolectados"]
+(tab_vivo, tab_horas, tab_estrategias, tab_portafolio, tab_agente, tab_prophet, tab_serie, tab_eval, tab_datos,
+ tab_mis_datos) = st.tabs(
+    ["En vivo y próxima hora", "Varias horas", "Estrategias", "Portafolio simulado", "Agente", "Prophet",
+     "Análisis de la serie", "Evaluación de modelos", "Datos recolectados", "Mis datos"]
 )
 
 
@@ -321,7 +355,7 @@ def panel_vivo(ticker, arts):
             aciertos = []
             for modelo in columnas_modelos:
                 correcto = revision[modelo] == revision["real"]
-                vista[modelo] = [f"{'▲' if p == 'Sube' else '▼'} {'✓' if ok else '✗'}"
+                vista[modelo] = [f"{'▲' if p == 'Sube' else '▼'} {'acierta' if ok else 'falla'}"
                                  for p, ok in zip(revision[modelo], correcto)]
                 aciertos.append(f"{modelo} {int(correcto.sum())}/{len(correcto)}")
             st.dataframe(vista, hide_index=True)
@@ -428,7 +462,7 @@ with tab_horas:
             fila[f"real a {n_real} h"] = round(float(real[-1]), 2)
             fila["error medio"] = f"{100 * np.mean(np.abs(predicho - real) / real):.2f}%"
             acierta = (predicho[-1] > info_h["cierre_origen"]) == (real[-1] > info_h["cierre_origen"])
-            fila["dirección"] = "✓" if acierta else "✗"
+            fila["dirección"] = "acierta" if acierta else "falla"
         filas_h.append(fila)
     st.dataframe(pd.DataFrame(filas_h), hide_index=True)
     if not reales_h.empty and len(reales_h) < horas:
@@ -457,6 +491,137 @@ with tab_horas:
                    "orígenes y solo con datos anteriores a cada uno. En gris, las referencias: el precio sin cambio y "
                    "'siempre sube'. Un modelo aporta si su línea queda por debajo del ingenuo (error) o por encima de "
                    "'siempre sube' (acierto).")
+
+
+# ------------------------------------------------------------------ pestaña: estrategias
+
+COLORES_ESTRATEGIA = {
+    estrategias.NOMBRE_BH: COLOR_REFERENCIA,
+    estrategias.NOMBRE_CRUCE: "#eda100",
+    estrategias.NOMBRE_RSI: "#008300",
+    estrategias.NOMBRE_CONSENSO: "#e34948",
+}
+
+
+def color_estrategia(nombre):
+    if nombre.startswith("Señal de "):
+        return color_modelo(nombre.removeprefix("Señal de "))
+    return COLORES_ESTRATEGIA.get(nombre, COLOR_REFERENCIA)
+
+
+def posicion_texto(posicion):
+    return "▲ Comprado" if posicion == 1 else "▼ Fuera del mercado"
+
+
+with tab_estrategias:
+    st.markdown(
+        "Cada estrategia decide al cierre de cada hora si queda **comprada** o **fuera del mercado** durante la hora "
+        "siguiente, usando solo la información disponible hasta ese momento. No se usan ventas en corto."
+    )
+    with st.expander("Cómo decide cada estrategia"):
+        st.markdown(
+            f"- **{estrategias.NOMBRE_BH}:** compra al inicio y no vende. Es la referencia que las demás deberían "
+            "superar.\n"
+            f"- **{estrategias.NOMBRE_CRUCE}:** comprada mientras el promedio de las últimas {config.SMA_RAPIDA} horas "
+            f"está por encima del de las últimas {config.SMA_LENTA} (tendencia al alza); fuera cuando está por debajo.\n"
+            f"- **{estrategias.NOMBRE_RSI}:** el RSI compara las subidas con las bajadas de las últimas "
+            f"{config.RSI_PERIODO} horas, en una escala de 0 a 100. Compra cuando baja de {config.RSI_COMPRA} "
+            f"(sobrevendida) y vende cuando supera {config.RSI_VENTA} (sobrecomprada).\n"
+            "- **Señal de cada modelo:** comprada cuando el modelo predice para la próxima hora un retorno mayor "
+            "que el umbral.\n"
+            f"- **{estrategias.NOMBRE_CONSENSO}:** comprada cuando más de la mitad de los modelos predice una subida "
+            "mayor que el umbral."
+        )
+    ajuste_1, ajuste_2 = st.columns(2)
+    costo_pct = ajuste_1.slider("Costo por cada compra o venta (%)", min_value=0.0, max_value=0.3,
+                                value=config.COSTO_OPERACION_PCT, step=0.01,
+                                help="Comisión más la diferencia entre precio de compra y de venta (spread).")
+    umbral_pct = ajuste_2.slider("Umbral de los modelos (%)", min_value=0.0, max_value=0.2, value=0.0, step=0.01,
+                                 help="Retorno predicho mínimo para comprar. Con 0 basta con que el modelo prediga "
+                                      "subida; un umbral cercano al costo evita operar por ganancias que no lo cubren.")
+
+    version_est = arts["resumen"]["entrenado_en"] if arts else None
+    tabla_sig, info_sig = prediccion_siguiente(ticker, INTERVALO, ultima_iso, ajuste_prophet(arts), version_est, arts)
+    completas_est = completas_hasta(ticker, INTERVALO, ultima_iso)
+    senales = estrategias.senales_actuales(completas_est["Close"], tabla_sig, umbral_pct)
+    st.markdown(f"**Posición de cada estrategia para la vela de {hora_doble(info_sig['objetivo'])}**")
+    st.dataframe(pd.DataFrame({
+        "estrategia": senales["estrategia"],
+        "posición": [posicion_texto(p) for p in senales["posicion"]],
+        "por qué": senales["motivo"],
+    }), hide_index=True)
+    st.caption("▲ Comprado = comprar o mantener la compra. ▼ Fuera del mercado = vender o seguir sin comprar.")
+
+    curvas, tabla_est = backtest_estrategias(ticker, INTERVALO, ultima_iso, costo_pct, umbral_pct, version_est, arts)
+    nombres_est = list(tabla_est["estrategia"])
+    preseleccion = [n for n in nombres_est if not n.startswith("Señal de ")]
+    elegidas = st.multiselect("Estrategias en el gráfico", nombres_est, default=preseleccion)
+    fig = go.Figure()
+    for nombre in elegidas:
+        es_referencia = nombre == estrategias.NOMBRE_BH
+        fig.add_trace(go.Scatter(x=a_hora_ny(curvas.index), y=100 * curvas[nombre], mode="lines", name=nombre,
+                                 line=dict(color=color_estrategia(nombre), width=2,
+                                           dash="dash" if es_referencia else "solid")))
+    fig.add_hline(y=100, line_dash="dot", line_color=COLOR_REFERENCIA)
+    fig.update_yaxes(tickprefix="$")
+    periodo = f"{curvas.index[0]:%d/%m/%Y} a {curvas.index[-1]:%d/%m/%Y}"
+    origen_periodo = "periodo de prueba del entrenamiento" if arts else f"últimas {len(curvas)} horas"
+    st.plotly_chart(estilo(fig, alto=430, titulo=f"Valor de 100 dólares invertidos · {origen_periodo}, {periodo}"),
+                    key="grafico_estrategias")
+
+    vista_est = pd.DataFrame({
+        "estrategia": tabla_est["estrategia"],
+        "retorno total": tabla_est["retorno_total_pct"].map(lambda v: f"{v:+.2f}%"),
+        "frente a comprar y mantener": tabla_est["vs_comprar_y_mantener_pct"].map(lambda v: f"{v:+.2f} pts"),
+        "máxima caída": tabla_est["maxima_caida_pct"].map(lambda v: f"{v:.2f}%"),
+        "operaciones": tabla_est["operaciones"],
+        "operaciones ganadoras": tabla_est["operaciones_ganadoras_pct"].map(lambda v: "" if pd.isna(v) else f"{v:.0f}%"),
+        "tiempo invertido": tabla_est["tiempo_invertido_pct"].map(lambda v: f"{v:.0f}%"),
+        "Sharpe anual": tabla_est["sharpe_anual"].map(lambda v: "" if pd.isna(v) else f"{v:.2f}"),
+    })
+    st.dataframe(vista_est, hide_index=True)
+    st.caption(
+        "Máxima caída: la peor pérdida desde un máximo previo del capital. Sharpe: retorno promedio por unidad de "
+        "riesgo, llevado a un año; por encima de 1 se considera bueno. Las señales de los modelos usan sus "
+        "predicciones del periodo de prueba, hechas con datos que no vieron al entrenar. Que una estrategia haya "
+        "funcionado en este periodo no garantiza que funcione después."
+    )
+
+
+# ------------------------------------------------------------------ pestaña: agente
+
+with tab_portafolio:
+    interfaz_cuenta.pestana_portafolio(usuario, tickers_con_modelos(), cotizacion_para, prediccion_para, series_para)
+
+
+def clave_gemini():
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("GEMINI_API_KEY")
+
+
+def contexto_agente():
+    version_ag = arts["resumen"]["entrenado_en"] if arts else None
+    tabla_ag, info_ag = prediccion_siguiente(ticker, INTERVALO, ultima_iso, ajuste_prophet(arts), version_ag, arts)
+    futuro_ag, info_futuro_ag = pronostico_varias_horas(ticker, INTERVALO, ultima_iso, datos.velas_por_dia(INTERVALO),
+                                                        ajuste_prophet(arts), version_ag, arts)
+    completas_ag = completas_hasta(ticker, INTERVALO, ultima_iso)
+    _, tabla_est_ag = backtest_estrategias(ticker, INTERVALO, ultima_iso, config.COSTO_OPERACION_PCT, 0.0,
+                                           version_ag, arts)
+    return agente.construir_contexto(
+        ticker, completas_ag, tabla_ag, info_ag,
+        metricas_modelos=pd.read_csv(arts["carpeta"] / "metricas.csv") if arts else None,
+        futuro=futuro_ag, info_futuro=info_futuro_ag,
+        senales=estrategias.senales_actuales(completas_ag["Close"], tabla_ag),
+        resultados_estrategias=tabla_est_ag, costo_pct=config.COSTO_OPERACION_PCT,
+    )
+
+
+with tab_agente:
+    interfaz_agente.pestana_agente(usuario, ticker, clave_gemini(), contexto_agente)
 
 
 # ------------------------------------------------------------------ pestaña 2: Prophet
@@ -555,7 +720,7 @@ with tab_serie:
 
 with tab_eval:
     if not arts:
-        st.info("Todavía no hay modelos entrenados para esta acción. Ejecuta en la terminal:")
+        st.info("Todavía no hay modelos entrenados para esta acción. Se entrenan desde la terminal con:")
         st.code(f"python entrenar.py --ticker {ticker}", language="bash")
     else:
         carpeta = arts["carpeta"]
@@ -641,7 +806,8 @@ with tab_eval:
             fig_h.update_xaxes(title="Época")
             fig_h.update_yaxes(title="MSE (retorno estandarizado)")
             titulo = (f"{'RNN simple' if tipo == 'rnn' else 'LSTM'}: ventana {mejor['ventana']}, "
-                      f"{mejor['unidades']} unidades, {mejor['capas']} capa(s)")
+                      f"{mejor['unidades']} unidades, {mejor['capas']} capa(s), "
+                      f"{mejor.get('optimizador', 'Adam')} con tasa {mejor['tasa']}")
             columna.plotly_chart(estilo(fig_h, alto=340, titulo=titulo, saltos=False), key=f"eval_curva_{tipo}")
         if "validacion_cruzada" in resumen:
             st.caption("Cada línea continua es el error de validación de la mejor combinación en un pliegue: el "
@@ -677,3 +843,14 @@ with tab_datos:
         st.dataframe(vista.rename_axis("hora NY").reset_index(), hide_index=True)
         st.download_button(f"Descargar CSV ({nombre.lower()})", datos.ruta_csv(ticker, intervalo).read_bytes(),
                            file_name=datos.ruta_csv(ticker, intervalo).name, mime="text/csv", key=f"descarga_{intervalo}")
+
+
+# ------------------------------------------------------------------ mis datos y pie de página
+
+with tab_mis_datos:
+    interfaz_cuenta.pestana_mis_datos(usuario)
+
+st.divider()
+st.caption(f"{config.NOMBRE_APP} es un proyecto académico de la Escuela Colombiana de Ingeniería Julio Garavito. Nada "
+           "de lo que se muestra es una recomendación de inversión, y el portafolio simulado usa solo dinero ficticio.")
+interfaz_cuenta.mostrar_politica()

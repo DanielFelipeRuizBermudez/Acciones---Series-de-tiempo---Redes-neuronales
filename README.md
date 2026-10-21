@@ -29,15 +29,15 @@ pip install -r requirements.txt
 
 ```powershell
 python recolector.py --una-vez      # 1. descarga inicial: ~60 días de velas de 2 min y ~2 años de velas de 1 h
-python entrenar.py --rapido         # 2a. prueba rápida de que todo funciona (1-2 min)
-python entrenar.py                  # 2b. entrenamiento completo con búsqueda de hiperparámetros (5-15 min)
-streamlit run app.py                # 3. dashboard
+python entrenar.py --rapido         # 2a. prueba rápida de que todo funciona (~2 min)
+python entrenar.py                  # 2b. entrenamiento completo con búsqueda de hiperparámetros (1 hora o más)
+python -m streamlit run app.py      # 3. dashboard
 ```
 
-Para otra acción: `python entrenar.py --ticker MSFT`. En el dashboard se elige en la barra lateral, donde
-también hay un buscador de símbolos.
+Para otra acción: `python entrenar.py --ticker MSFT`. La lista de la barra lateral solo muestra las acciones que ya
+tienen modelos entrenados, así que la acción nueva aparece ahí después de entrenarla.
 
-Para seguir recolectando datos aunque el dashboard esté cerrado, deja corriendo en otra terminal:
+Para seguir recolectando datos con el dashboard cerrado, el recolector puede quedar corriendo en otra terminal:
 
 ```powershell
 python recolector.py --tickers AAPL MSFT
@@ -84,10 +84,12 @@ dirección que dijeron los modelos.
    validación, porque cada pliegue le exigiría decenas de ajustes más.
    - AR: `p` de 1 a 10.
    - Prophet: `changepoint_prior_scale` {0.01, 0.05, 0.3} × `seasonality_prior_scale` {0.1, 1, 10}.
-   - RNN y LSTM: ventana {7, 14, 35 velas ≈ 1 día, 2 días, 1 semana} × unidades {32, 64} × capas {1, 2},
-     con *early stopping*.
-   Las rejillas (`REJILLA_REDES`, `PROPHET_REJILLA`) se cambian en `config.py`; en las redes también se puede
-   agregar `dropout` y `tasa` de aprendizaje. Cada valor nuevo multiplica el tiempo de entrenamiento.
+   - RNN y LSTM: ventana {7, 14, 35 velas ≈ 1 día, 2 días, 1 semana} × unidades {32, 64} × capas {1, 2} ×
+     tasa de aprendizaje {0.01, 0.05, 0.1}. Los pesos se ajustan con **descenso de gradiente estocástico** (SGD,
+     sin momento) sobre lotes de 32 ventanas, minimizando el MSE, con dropout de 0.2 y *early stopping*
+     (paciencia de 10 épocas, máximo 100).
+   Las rejillas (`REJILLA_REDES`, `PROPHET_REJILLA`) y el optimizador se cambian en `config.py`. Cada valor nuevo
+   multiplica el tiempo de entrenamiento.
 5. **Evaluación en prueba**: acierto de dirección con su margen de error al 95%, error medio del precio y RMSE del
    retorno. Prophet se evalúa reajustándose una vez por día de prueba, sin ver nunca datos futuros.
 
@@ -108,11 +110,96 @@ predicen). Prophet evalúa su curva en cada hora futura. Se puede pronosticar de
 de las últimas 10 sesiones para compararlo con lo que pasó, y calcular el error promedio y el acierto de dirección
 según el horizonte. La franja gris es el rango del 80% de una caminata aleatoria con la volatilidad reciente.
 
+### Estrategias de compra y venta (pestaña *Estrategias*)
+
+Cada estrategia decide al cierre de cada hora si queda **comprada** o **fuera del mercado** durante la hora
+siguiente, solo con información disponible hasta ese momento (no hay ventas en corto):
+
+| Estrategia | Regla |
+|---|---|
+| Comprar y mantener | Compra al inicio y no vende: la referencia |
+| Cruce de medias 20/50 | Comprada mientras el promedio de 20 horas está por encima del de 50 horas |
+| RSI(14) 30/70 | Compra cuando el RSI baja de 30 y vende cuando supera 70 |
+| Señal de cada modelo | Comprada cuando el retorno predicho para la próxima hora supera un umbral |
+| Consenso de modelos | Comprada cuando más de la mitad de los modelos predice subida |
+
+El backtest usa el periodo de prueba del entrenamiento, donde las predicciones de los modelos son fuera de muestra,
+cobra un costo en cada compra y en cada venta (0,05% por defecto, ajustable en la pestaña) y reporta el retorno total,
+la diferencia frente a comprar y mantener, la máxima caída, el número de operaciones, el porcentaje de operaciones
+ganadoras, el tiempo invertido y el Sharpe anualizado. Los parámetros de las reglas están en `config.py`.
+
+### Agente (pestaña *Agente*)
+
+Chat que explica el estado de la acción. Los números los calcula el dashboard (predicción de la próxima hora,
+pronóstico a 7 horas, métricas de prueba, posición y backtest de cada estrategia) y se envían a Gemini como contexto
+en cada pregunta; sus instrucciones (`agente.py`) le piden usar solo esos datos y no dar recomendaciones personales.
+La llamada al modelo se hace con **LiteLLM** (`litellm.completion` con el modelo `gemini/...`). Para usar el agente
+hay que iniciar sesión, y cada cuenta tiene 20 preguntas por día.
+
+**Guardrails (`guardrails.py`).**
+
+| Momento | Qué revisa | Qué hace |
+|---|---|---|
+| Entrada | Nombres (Microsoft Presidio con spaCy en español, y frases como "me llamo…"), cédulas, correos, teléfonos y números de cuenta o tarjeta (expresiones regulares) | Los reemplaza por [NOMBRE], [DOCUMENTO], [CORREO], [TELEFONO] o [CUENTA] antes de enviar la pregunta |
+| Entrada | Intentos de *prompt injection*: ignorar o revelar las instrucciones, cambiar el papel del agente, "modo desarrollador", marcas de mensajes de sistema | Bloquea la pregunta sin enviarla |
+| Entrada | Preguntas de más de 500 caracteres | Las bloquea |
+| Salida | Recomendaciones personales de inversión ("te recomiendo comprar", "deberías vender", "es buen momento para…") | Bloquea la respuesta y explica por qué |
+| Salida | Cifras que no aparecen en los datos de la app ni en la pregunta | Las reemplaza por "[cifra no verificada]" |
+
+Si Presidio o el modelo `es_core_news_sm` no están instalados, la detección de nombres sigue funcionando solo con las
+frases y la pestaña lo indica. `python guardrails.py` muestra qué detector está activo y cómo anonimiza unos ejemplos.
+
+**Uso, historial y auditoría (`registro_agente.py`).** La cuota se cuenta por cuenta y por día (hora de Bogotá). El
+historial de conversaciones solo se guarda si el usuario lo activa en *Mis datos*, y siempre con las preguntas ya
+anonimizadas. De cada pregunta se registra una auditoría con la fecha, el modelo, el resultado (respondida, bloqueada,
+sin cuota, error) y el tipo de datos personales detectados, sin el texto y sin el usuario.
+
+La clave de la API se guarda en `.streamlit/secrets.toml`, dentro de la carpeta del proyecto, o en los *Secrets* de
+la app publicada (también sirve la variable de entorno `GEMINI_API_KEY`). Ese archivo está en `.gitignore`:
+
+```toml
+GEMINI_API_KEY = "clave-de-gemini"
+```
+
+La clave solo existe en el servidor: los usuarios nunca la ven ni la usan directamente. Si se llegara a exponer, se
+crea una nueva en Google AI Studio, se reemplaza en los *Secrets* y se borra la anterior. Los modelos de Gemini
+disponibles en la pestaña se definen en `GEMINI_MODELOS` (`config.py`).
+
+### Cuentas y portafolio simulado (pestañas *Portafolio simulado* y *Mis datos*)
+
+Cada usuario se registra con alias, correo y contraseña y recibe 10.000 USD ficticios para comprar y vender las
+acciones que tienen modelos entrenados. Las reglas están en `portafolio.py` y en la pestaña:
+
+- Solo con el mercado abierto y al último precio de 2 minutos, que debe tener menos de 10 minutos.
+- Acciones enteras, comisión simulada del 0,1% por operación, sin comprar sin saldo ni vender lo que no se tiene.
+- Antes de confirmar se muestran la predicción de cada modelo y el consenso; la decisión es del usuario.
+- El rendimiento se compara con comprar y mantener desde el inicio del portafolio y se cuenta cuántas operaciones
+  siguieron al consenso de los modelos.
+
+Cada operación se valida en el servidor dentro de la misma transacción que la registra, así que el efectivo solo
+cambia por una operación válida; además, la pestaña verifica que el efectivo guardado coincida con la suma de las
+operaciones. En *Mis datos* el usuario ve todo lo que se guarda sobre él, lo descarga, corrige su alias y su correo,
+cambia su contraseña, reinicia el portafolio o elimina su cuenta (Ley 1581). La política de tratamiento de datos está
+en `politica_datos.md` y se muestra en el registro y al pie de la aplicación.
+
+**Base de datos (`base_datos.py`).** En el equipo local se usa SQLite (`base_datos/usuarios.db`, fuera del
+repositorio). En Streamlit Community Cloud el disco se borra con cada reinicio, así que allá se usa una base Postgres
+gratuita (por ejemplo, de [Neon](https://neon.com)): basta con agregar estas líneas en los *Secrets* de la app:
+
+```toml
+DATABASE_URL = "postgresql://usuario:contraseña@servidor/basededatos?sslmode=require"
+CLAVE_DATOS = "una frase larga y aleatoria"
+```
+
+`CLAVE_DATOS` cifra los correos; si se cambia o se pierde, los correos guardados ya no se pueden leer y nadie podría
+iniciar sesión, así que se define una sola vez. Las contraseñas se guardan con hash bcrypt, la cuenta se bloquea 15
+minutos tras 5 intentos fallidos y la sesión se cierra tras 30 minutos sin actividad.
+
 ## Cómo leer los resultados
 
 En acciones líquidas y a 1 hora, lo normal es que ningún modelo supere con claridad a *siempre sube*. Un acierto de
-52% con un margen de ±4 puntos no es evidencia de poder predictivo. Ese resultado también es válido para el informe:
-se puede discutir por qué (eficiencia del mercado, ruido) y comparar con otros horizontes.
+52% con un margen de ±4 puntos no es evidencia de poder predictivo. Es lo esperable en un mercado eficiente, donde el
+movimiento de una hora a otra es casi todo ruido.
 
 ## Limitaciones conocidas
 
@@ -125,8 +212,7 @@ se puede discutir por qué (eficiencia del mercado, ruido) y comparar con otros 
 ## Próximos pasos
 
 - Comparar horizontes: `python entrenar.py --intervalo 30m` (solo hay ~60 días de historia a 30 minutos).
-- Reglas de inversión (umbral de retorno predicho, confirmación entre modelos) y backtest contra comprar y mantener.
-- Agente de Gemini: `prediccion.resumen_para_agente()` ya arma el texto con el estado de la acción y las
-  predicciones; el dashboard lo muestra en *En vivo → Resumen de texto*.
+- Prueba de McNemar para comparar el acierto de cada modelo con "Siempre sube" sobre las mismas velas.
+- Variables de contexto del mercado (retorno de SPY o QQQ, VIX) como entradas adicionales de los modelos.
 
 *Proyecto académico. Nada de esto es una recomendación de inversión.*

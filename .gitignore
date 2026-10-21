@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *.tmp
 .venv/
+.streamlit/secrets.toml
+base_datos/

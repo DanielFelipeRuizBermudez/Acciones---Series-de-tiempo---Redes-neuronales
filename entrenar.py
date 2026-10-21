@@ -129,7 +129,7 @@ def main():
     resumen["redes"] = {}
     for paso, tipo in ((3, "rnn"), (4, "lstm")):
         nombre = modelos_redes.TIPOS[tipo]
-        print(f"\n[{paso}/4] {nombre}: búsqueda de hiperparámetros")
+        print(f"\n[{paso}/4] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
 
         def informar(numero, total, fila):
             print(f"  {numero:>2}/{total} ventana={fila['ventana']:<3} unidades={fila['unidades']:<3} "
@@ -149,7 +149,7 @@ def main():
               f"dropout={elegido['dropout']}, tasa={elegido['tasa']}; reentrenado con todo el desarrollo "
               f"durante {elegido['epocas_finales']} épocas")
         tabla.to_csv(salida / f"busqueda_{tipo}.csv", index=False)
-        resumen["redes"][tipo] = mejor["fila"]
+        resumen["redes"][tipo] = {**mejor["fila"], "optimizador": config.OPTIMIZADOR}
 
     joblib.dump(escalado, salida / "escalado.pkl")
     tabla = evaluacion.tabla_metricas(filas_metricas)

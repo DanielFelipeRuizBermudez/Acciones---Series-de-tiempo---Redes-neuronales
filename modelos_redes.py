@@ -1,4 +1,8 @@
-"""Redes neuronales recurrentes (RNN simple y LSTM) para predecir el log-retorno de la siguiente vela."""
+"""Redes neuronales recurrentes (RNN simple y LSTM) para predecir el log-retorno de la siguiente vela.
+
+Los pesos se ajustan con descenso de gradiente estocástico (SGD, sin momento) sobre lotes de ventanas; la tasa de
+aprendizaje es un hiperparámetro más de la búsqueda en rejilla.
+"""
 
 import itertools
 import os
@@ -27,7 +31,7 @@ def construir_modelo(tipo, ventana, n_caracteristicas, unidades, capas, dropout,
     for capa in range(capas):
         modelo.add(celda(unidades, return_sequences=capa < capas - 1, dropout=dropout))
     modelo.add(keras.layers.Dense(1))
-    modelo.compile(optimizer=keras.optimizers.Adam(learning_rate=tasa), loss="mse")
+    modelo.compile(optimizer=keras.optimizers.SGD(learning_rate=tasa), loss="mse")
     return modelo
 
 
@@ -56,8 +60,15 @@ def _evaluar_pliegue(tipo, f, pliegue, ventana, unidades, capas, dropout, tasa):
     historial = entrenar_modelo(modelo, x_tr, y_tr, x_va, y_va)
     pred = predecir(modelo, x_va, escalado)
     rmse = float(np.sqrt(np.mean((escalado.invertir_y(y_va) - pred) ** 2)))
-    mejor_epoca = int(historial["val_loss"].to_numpy().argmin()) + 1
+    perdida = historial["val_loss"].to_numpy(dtype=float)
+    mejor_epoca = int(np.nanargmin(perdida)) + 1 if np.isfinite(perdida).any() else 1
     return rmse, mejor_epoca, historial, int(modelo.count_params())
+
+
+def _puntaje(fila):
+    """RMSE de validación cruzada; una combinación que diverge (NaN) nunca gana."""
+    valor = fila["rmse_cv_pct"]
+    return valor if np.isfinite(valor) else np.inf
 
 
 def buscar_hiperparametros(tipo, f, cortes, escalado_final, rejilla=config.REJILLA_REDES, k=config.PLIEGUES_CV,
@@ -88,7 +99,7 @@ def buscar_hiperparametros(tipo, f, cortes, escalado_final, rejilla=config.REJIL
         filas.append(fila)
         if al_terminar:
             al_terminar(numero, len(combinaciones), fila)
-        if mejor_fila is None or fila["rmse_cv_pct"] < mejor_fila["rmse_cv_pct"]:
+        if mejor_fila is None or _puntaje(fila) < _puntaje(mejor_fila):
             mejor_fila, historiales_mejor = fila, historiales
 
     keras.utils.set_random_seed(config.SEMILLA)
