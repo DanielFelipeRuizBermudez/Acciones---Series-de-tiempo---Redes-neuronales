@@ -66,8 +66,8 @@ VELAS_POR_ANO = 7 * 252
 GEMINI_MODELOS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
 NOMBRE_APP = "Predicción de acciones"
-CORREO_CONTACTO = "[correo del equipo]"
-RESPONSABLE_CONSULTAS = "[nombre del integrante encargado]"
+CORREO_CONTACTO = "acciones1stdg2appr3espd@gmail.com"
+RESPONSABLE_CONSULTAS = "Daniel Ruiz"
 VERSION_POLITICA = "2026-10-20"
 
 SALDO_INICIAL = 10_000.0
