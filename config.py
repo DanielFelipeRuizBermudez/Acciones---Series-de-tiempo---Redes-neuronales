@@ -23,7 +23,7 @@ MINUTOS_INTERVALO = {"1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30, "60m": 60,
 HISTORIA_MAXIMA_DIAS = {"1m": 6, "2m": 58, "5m": 58, "15m": 58, "30m": 58, "60m": 720, "1h": 720, "90m": 58}
 SOLAPAMIENTO_DIAS = 3
 
-CARACTERISTICAS = ["log_ret", "rango", "vol_rel"]
+CARACTERISTICAS = ["log_ret"]
 VENTANA_VOLUMEN = 35
 
 PROPORCION_VALIDACION = 0.15
@@ -55,11 +55,22 @@ REJILLA_REDES_RAPIDA = {
     "dropout": [0.2],
     "tasa": [0.05],
 }
-SMA_RAPIDA = 20
-SMA_LENTA = 50
-RSI_PERIODO = 14
-RSI_COMPRA = 30
-RSI_VENTA = 70
+REJILLA_CNN = {
+    "velas": [10, 20],
+    "filtros": [16, 32],
+    "tasa": [0.01, 0.05],
+}
+REJILLA_CNN_RAPIDA = {
+    "velas": [20],
+    "filtros": [16],
+    "tasa": [0.05],
+}
+CNN_ALTO_IMAGEN = 40
+CNN_ANCHO_VELA = 4
+CNN_DROPOUT = 0.2
+CNN_UMBRAL = 0.5
+
+VELAS_SEGUIDAS = 3
 COSTO_OPERACION_PCT = 0.05
 VELAS_POR_ANO = 7 * 252
 
@@ -68,7 +79,7 @@ GEMINI_MODELOS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 NOMBRE_APP = "Predicción de acciones"
 CORREO_CONTACTO = "acciones1stdg2appr3espd@gmail.com"
 RESPONSABLE_CONSULTAS = "Daniel Ruiz"
-VERSION_POLITICA = "2026-10-20"
+VERSION_POLITICA = "2026-10-27"
 
 SALDO_INICIAL = 10_000.0
 COMISION_SIMULADA_PCT = 0.1

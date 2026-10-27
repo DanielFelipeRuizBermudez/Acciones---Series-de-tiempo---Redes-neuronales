@@ -2,9 +2,10 @@
 
 Entrada
 - Datos personales: los nombres se detectan con Microsoft Presidio (reconocimiento de entidades de spaCy en español)
-  y con frases como "me llamo ..."; cédulas, correos, teléfonos y números de cuenta o tarjeta, con expresiones
-  regulares. Cada dato se reemplaza por una etiqueta ([NOMBRE], [DOCUMENTO], [CORREO], [TELEFONO], [CUENTA]) antes de
-  que la pregunta salga de la aplicación. Si Presidio o el modelo de spaCy no están instalados, se usan solo las
+  y con frases como "me llamo ..."; cédulas, correos, teléfonos, números de cuenta o tarjeta, direcciones colombianas
+  ("Calle 45 # 12-34", "vivo en ...") y fechas de nacimiento, con expresiones regulares. Cada dato se reemplaza por una
+  etiqueta ([NOMBRE], [DOCUMENTO], [CORREO], [TELEFONO], [CUENTA], [DIRECCION], [FECHA]) antes de que la pregunta salga
+  de la aplicación. Si Presidio o el modelo de spaCy no están instalados, se usan solo las
   expresiones regulares y las frases.
 - Prompt injection: se bloquean las preguntas que intentan cambiar o revelar las instrucciones del agente.
 
@@ -25,6 +26,8 @@ ETIQUETAS = {
     "CORREO": "[CORREO]",
     "TELEFONO": "[TELEFONO]",
     "CUENTA": "[CUENTA]",
+    "DIRECCION": "[DIRECCION]",
+    "FECHA": "[FECHA]",
 }
 CIFRA_OCULTA = "[cifra no verificada]"
 CIFRAS_DE_REFERENCIA = (50.0, 100.0)
@@ -46,6 +49,21 @@ _DOCUMENTO_LARGO = re.compile(_SUELTO_ANTES + r"\d{8,10}" + _SUELTO_DESPUES)
 _DOCUMENTO_CORTO = re.compile(_SUELTO_ANTES + r"\d{6,7}" + _SUELTO_DESPUES)
 _CONTEXTO_DOCUMENTO = re.compile(r"(?i)(c[eé]dula|\bc\.?\s?c\.?|documento|identificaci[oó]n|\bnit\b|pasaporte|"
                                  r"\bdni\b|\bid\b)[^\d]{0,20}$")
+_VIA = (r"(?:avenida\s+carrera|avenida\s+calle|calle|carrera|avenida|diagonal|transversal|circular|autopista|"
+        r"cll|cl|kra|kr|cra|cr|ak|ac|av|dg|tv|tr)\.?")
+_DIRECCION = re.compile(
+    r"(?i)\b" + _VIA + r"\s*(?:\d{1,3}\s*[a-z]?(?:\s*bis)?|[a-záéíóúñ]+(?:\s+[a-záéíóúñ]+)?)(?:\s*(?:sur|este|norte))?"
+    r"\s*(?:#|n[°ºo]\.?|num\.?|n[uú]mero)\s*\d{1,3}\s*[a-z]?\s*[-–]\s*\d{1,3}(?:\s*(?:sur|este))?"
+    r"(?:\s*,?\s*(?:apto|apartamento|ap|int|interior|torre|casa|oficina|of|piso)\.?\s*\d{1,4}[a-z]?)*"
+)
+_FRASE_DIRECCION = re.compile(
+    r"(?i)\b(?:mi direcci[oó]n es|vivo en|resido en|mi casa (?:es|queda) en)\s+([^.,;:?!¿\n]{3,60}?)"
+    r"(?=\s+(?:y|e|pero|porque|que|quiero|para|con|desde|hace)\b|[.,;:?!¿\n]|$)")
+_FECHA_NACIMIENTO = re.compile(
+    r"(?i)\b(?:nac[ií]|naci[oó]|nacid[oa]|fecha de nacimiento|cumplea[ñn]os|cumplo a[ñn]os)\D{0,25}?"
+    r"(\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{2,4}|\d{4}-\d{2}-\d{2}"
+    r"|\d{1,2}\s+de\s+[a-záéíóú]+(?:\s+(?:de|del)\s+\d{4})?)"
+)
 _FRASE_NOMBRE = re.compile(
     r"(?i:\b(?:me llamo|mi nombre es|soy|habla|atentamente,?|saludos,?|att\.?))\s+"
     r"((?:[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+)(?:\s+(?:de\s+(?:la\s+)?)?[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+){0,3})"
@@ -83,7 +101,7 @@ class ResultadoSalida:
 # ------------------------------------------------------------------ datos personales
 
 def datos_estructurados(texto):
-    """Correos, tarjetas, cuentas, teléfonos y documentos encontrados con expresiones regulares."""
+    """Correos, tarjetas, cuentas, teléfonos, documentos, direcciones y fechas de nacimiento (expresiones regulares)."""
     hallazgos = [Hallazgo(m.start(), m.end(), "CORREO") for m in _CORREO.finditer(texto)]
     hallazgos += [Hallazgo(m.start(1), m.end(1), "CUENTA") for m in _CUENTA.finditer(texto)]
     hallazgos += [Hallazgo(m.start(), m.end(), "CUENTA") for m in _TARJETA.finditer(texto)
@@ -93,6 +111,9 @@ def datos_estructurados(texto):
     hallazgos += [Hallazgo(m.start(), m.end(), "DOCUMENTO") for m in _DOCUMENTO_LARGO.finditer(texto)]
     hallazgos += [Hallazgo(m.start(), m.end(), "DOCUMENTO") for m in _DOCUMENTO_CORTO.finditer(texto)
                   if _CONTEXTO_DOCUMENTO.search(texto[max(0, m.start() - 30):m.start()])]
+    hallazgos += [Hallazgo(m.start(), m.end(), "DIRECCION") for m in _DIRECCION.finditer(texto)]
+    hallazgos += [Hallazgo(m.start(1), m.end(1), "DIRECCION") for m in _FRASE_DIRECCION.finditer(texto)]
+    hallazgos += [Hallazgo(m.start(1), m.end(1), "FECHA") for m in _FECHA_NACIMIENTO.finditer(texto)]
     return hallazgos
 
 

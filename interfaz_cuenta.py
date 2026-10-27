@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -12,20 +13,26 @@ import cuentas
 import datos
 import portafolio
 import registro_agente
+import solicitudes
 
 RUTA_POLITICA = config.RAIZ / "politica_datos.md"
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 TIPO_A_TEXTO = {"compra": "Compra", "venta": "Venta"}
 
 AVISO_PRIVACIDAD = (
-    "**Aviso de privacidad.** El equipo del proyecto {nombre_app}, estudiantes de la Escuela Colombiana de Ingeniería "
-    "Julio Garavito, con domicilio en Bogotá y correo {correo}, es responsable de tus datos personales. Usamos tu "
-    "alias, tu correo y tu contraseña (guardada solo como hash) para crear y proteger tu cuenta y llevar tu portafolio "
-    "simulado con dinero ficticio, y para responder tus preguntas al agente: antes de enviarse a Google Gemini, "
-    "las preguntas se anonimizan. No vendemos tus datos ni los usamos para publicidad. Puedes conocer, actualizar, "
-    "rectificar y suprimir tus datos, o revocar esta autorización, desde la pestaña Mis datos o escribiendo a "
-    "{correo}. La política completa está en el enlace de abajo."
+    "**Aviso de privacidad.** {responsable}, estudiante de la Escuela Colombiana de Ingeniería Julio Garavito y autor "
+    "del proyecto {nombre_app}, con domicilio en Bogotá y correo {correo}, es el responsable de tus datos personales. "
+    "Tu alias y tu contraseña (guardada solo como hash) sirven para crear y proteger tu cuenta y llevar tu portafolio "
+    "simulado con dinero ficticio. Tu nombre, correo, teléfono, dirección, ciudad y fecha de nacimiento se cifran con "
+    "una llave que solo abre tu contraseña: nadie más los puede leer, y si el administrador necesita contactarte, te "
+    "pide permiso y tú decides qué datos compartes y por cuánto tiempo. La fecha de nacimiento sirve para comprobar "
+    "que eres mayor de edad. Antes de enviarse a Google Gemini, las preguntas al agente se anonimizan. Tus datos no se "
+    "venden ni se usan para publicidad. Puedes conocer, actualizar, rectificar y suprimir tus datos, o revocar esta "
+    "autorización, desde la pestaña Mis datos o escribiendo a {correo}. La política completa está en el enlace de "
+    "abajo."
 )
+MINUTOS_DATOS_ABIERTOS = 5
+FECHA_MINIMA = date(1900, 1, 1)
 
 
 def _rellenar(texto):
@@ -66,6 +73,8 @@ def reglas_del_juego():
 
 
 def _hora(marca):
+    if not marca:
+        return "—"
     marca = pd.Timestamp(marca)
     ny = marca.tz_convert(config.ZONA_MERCADO)
     bogota = marca.tz_convert(config.ZONA_USUARIO)
@@ -98,7 +107,8 @@ def base():
 
 def _cerrar_sesion(aviso=None):
     """Cierra la sesión y borra de la pantalla todo lo de la cuenta, incluidas las conversaciones con el agente."""
-    for clave in [k for k in st.session_state if str(k).startswith("chat_")] + ["sesion", "orden", "resultado_operacion"]:
+    claves = ["sesion", "orden", "resultado_operacion", "datos_abiertos"]
+    for clave in [k for k in st.session_state if str(k).startswith("chat_")] + claves:
         st.session_state.pop(clave, None)
     if aviso:
         st.session_state["aviso_sesion"] = aviso
@@ -125,11 +135,34 @@ def sesion():
     return actual
 
 
+def correo_admin():
+    return _secreto("CORREO_ADMIN")
+
+
+def _sin_formato(texto):
+    """Texto escrito por otra persona, mostrado sin que su Markdown cambie la página."""
+    return "".join("\\" + c if c in "\\`*_{}[]()#+-.!|<>~" else c for c in str(texto))
+
+
+def _bloqueada(error):
+    """Si la cuenta quedó bloqueada por intentos fallidos, se cierra la sesión."""
+    if isinstance(error, cuentas.CuentaBloqueada):
+        _cerrar_sesion(str(error))
+        st.rerun()
+    st.error(str(error))
+
+
 def barra_lateral(usuario):
     st.sidebar.divider()
     st.sidebar.header("Cuenta")
     if usuario:
         st.sidebar.caption(f"Sesión iniciada como **{usuario['alias']}**.")
+        bd, error = base()
+        if not error:
+            n = solicitudes.pendientes(bd, usuario["token"])
+            if n:
+                st.sidebar.warning(f"Tienes {n} {'solicitud' if n == 1 else 'solicitudes'} de acceso a tus datos "
+                                   "personales. Revísalas en la pestaña Mis datos.")
         if st.sidebar.button("Cerrar sesión"):
             _cerrar_sesion()
             st.rerun()
@@ -165,14 +198,16 @@ def _formularios(bd):
 
     with st.form("form_registro"):
         alias = st.text_input("Alias", max_chars=30, help="Cómo te verás en la aplicación. No tiene que ser tu nombre.")
-        correo = st.text_input("Correo", help="Sirve para iniciar sesión. Se guarda cifrado.")
         columna_1, columna_2 = st.columns(2)
         contrasena = columna_1.text_input("Contraseña", type="password",
-                                          help=f"Al menos {config.CONTRASENA_MINIMA} caracteres, con letras y números.")
+                                          help=f"Al menos {config.CONTRASENA_MINIMA} caracteres, con letras y números. "
+                                               "También protege la llave que cifra tus datos personales: si la "
+                                               "olvidas, esos datos no se pueden recuperar.")
         confirmacion = columna_2.text_input("Repite la contraseña", type="password")
+        st.markdown("**Datos personales** (se cifran con tu llave; solo tú los puedes ver)")
+        personales = _campos_personales("registro")
         st.markdown(_rellenar(AVISO_PRIVACIDAD))
         mostrar_politica("Leer la política de tratamiento de datos personales")
-        mayor = st.checkbox("Confirmo que soy mayor de 18 años.", value=False)
         autoriza = st.checkbox(
             "Autorizo de forma previa, expresa e informada el tratamiento de mis datos personales para las finalidades "
             "descritas en la Política de tratamiento de datos personales, incluido su almacenamiento en servidores que "
@@ -181,7 +216,8 @@ def _formularios(bd):
                                 "momento).", value=False)
         if st.form_submit_button("Crear cuenta", type="primary"):
             try:
-                usuario = cuentas.registrar(bd, alias, correo, contrasena, confirmacion, mayor, autoriza, historial)
+                with st.spinner("Creando tu cuenta y tu par de llaves…"):
+                    usuario = cuentas.registrar(bd, alias, contrasena, confirmacion, personales, autoriza, historial)
             except cuentas.ErrorCuenta as error:
                 st.error(str(error))
             else:
@@ -189,8 +225,56 @@ def _formularios(bd):
                 st.session_state["resultado_operacion"] = (
                     f"Cuenta creada. Tienes {config.SALDO_INICIAL:,.0f} USD ficticios para empezar.")
                 st.rerun()
-    st.caption("Las dos primeras casillas son obligatorias. Se guarda la fecha y hora en que se marcaron, como prueba "
-               "de la autorización.")
+    st.caption("Todos los campos y la casilla de autorización son obligatorios. Se guarda la fecha y hora de la "
+               "autorización, como prueba. La aplicación es solo para mayores de 18 años.")
+
+
+def _campos_personales(clave, actuales=None, con_correo=True):
+    """Campos del formulario de datos personales (dentro de un st.form)."""
+    actuales = actuales or {}
+    personales = {}
+    columna_1, columna_2 = st.columns(2)
+    personales["nombre"] = columna_1.text_input("Nombre completo", value=actuales.get("nombre", ""), max_chars=80,
+                                                key=f"{clave}_nombre")
+    if con_correo:
+        personales["correo"] = columna_2.text_input("Correo", value=actuales.get("correo", ""),
+                                                    help="Sirve para iniciar sesión.", key=f"{clave}_correo")
+    personales["telefono"] = columna_1.text_input("Teléfono", value=actuales.get("telefono", ""), max_chars=20,
+                                                  key=f"{clave}_telefono")
+    fecha = actuales.get("fecha_nacimiento")
+    personales["fecha_nacimiento"] = columna_2.date_input(
+        "Fecha de nacimiento", value=date.fromisoformat(fecha) if fecha else None, min_value=FECHA_MINIMA,
+        max_value=cuentas.hoy_bogota(), format="DD/MM/YYYY", key=f"{clave}_fecha")
+    personales["direccion"] = columna_1.text_input("Dirección", value=actuales.get("direccion", ""), max_chars=120,
+                                                   key=f"{clave}_direccion")
+    personales["ciudad"] = columna_2.text_input("Ciudad", value=actuales.get("ciudad", ""), max_chars=60,
+                                                key=f"{clave}_ciudad")
+    return personales
+
+
+def _formulario_completar(bd, usuario, lugar):
+    """Cuentas creadas antes de los datos personales cifrados. `lugar` distingue el formulario de cada pestaña."""
+    st.warning("Para seguir usando tu cuenta, completa tus datos personales. Se cifran con una llave nueva que solo "
+               "abre tu contraseña, y el correo deja de tener una copia que la aplicación pueda leer.")
+    with st.form(f"form_completar_{lugar}"):
+        personales = _campos_personales(f"completar_{lugar}",
+                                        {"correo": cuentas.correo_anterior(bd, usuario["token"]) or ""})
+        contrasena = st.text_input("Tu contraseña", type="password", help="Protege tu llave privada.",
+                                   key=f"completar_{lugar}_contrasena")
+        st.markdown(_rellenar(AVISO_PRIVACIDAD))
+        mostrar_politica("Leer la política de tratamiento de datos personales")
+        autoriza = st.checkbox(f"Autorizo el tratamiento de mis datos personales según la política del "
+                               f"{config.VERSION_POLITICA}, incluido su almacenamiento en servidores que pueden estar "
+                               "fuera de Colombia.", value=False, key=f"completar_{lugar}_autoriza")
+        if st.form_submit_button("Guardar mis datos", type="primary"):
+            try:
+                with st.spinner("Creando tu par de llaves…"):
+                    cuentas.completar_datos(bd, usuario["token"], contrasena, personales, autoriza)
+            except cuentas.ErrorCuenta as error:
+                _bloqueada(error)
+            else:
+                st.session_state["resultado_operacion"] = "Datos guardados y cifrados con tu llave."
+                st.rerun()
 
 
 # ------------------------------------------------------------------ portafolio simulado
@@ -332,6 +416,9 @@ def pestana_portafolio(usuario, tickers, cotizacion_de, prediccion_de, series_de
     mensaje = st.session_state.pop("resultado_operacion", None)
     if mensaje:
         st.success(mensaje)
+    if cuentas.necesita_completar(bd, usuario["token"]):
+        _formulario_completar(bd, usuario, "portafolio")
+        return
 
     operaciones = estado_actual["operaciones"]
     acciones_por_ticker = {}
@@ -386,6 +473,130 @@ def pestana_portafolio(usuario, tickers, cotizacion_de, prediccion_de, series_de
 
 # ------------------------------------------------------------------ mis datos
 
+def _datos_abiertos():
+    """Datos personales descifrados en esta sesión, si no han pasado MINUTOS_DATOS_ABIERTOS."""
+    abiertos = st.session_state.get("datos_abiertos")
+    if abiertos and pd.Timestamp.now(tz="UTC") <= abiertos["hasta"]:
+        return abiertos["datos"]
+    st.session_state.pop("datos_abiertos", None)
+    return None
+
+
+def _seccion_datos_personales(bd, token):
+    st.markdown("#### Mis datos personales")
+    st.caption(
+        "Tu nombre, correo, teléfono, dirección, ciudad y fecha de nacimiento están en un sobre cifrado con tu llave "
+        "pública. Solo tu llave privada lo abre, y tu llave privada solo se abre con tu contraseña: ni el "
+        "administrador ni quien tenga acceso a la base de datos los puede leer.")
+    abiertos = _datos_abiertos()
+    if abiertos is None:
+        with st.form("form_abrir_datos", clear_on_submit=True):
+            contrasena = st.text_input("Tu contraseña", type="password", key="abrir_datos_contrasena")
+            if st.form_submit_button("Ver mis datos personales"):
+                try:
+                    with st.spinner("Abriendo tu llave privada…"):
+                        datos_titular = cuentas.abrir_datos_personales(bd, token, contrasena)
+                except cuentas.ErrorCuenta as error:
+                    _bloqueada(error)
+                else:
+                    st.session_state["datos_abiertos"] = {
+                        "datos": datos_titular,
+                        "hasta": pd.Timestamp.now(tz="UTC") + pd.Timedelta(minutes=MINUTOS_DATOS_ABIERTOS)}
+                    st.rerun()
+        return
+
+    st.dataframe(pd.DataFrame([(nombre, abiertos.get(campo) or "—")
+                               for campo, nombre in cuentas.CAMPOS_PERSONALES.items()],
+                              columns=["dato", "valor"]), hide_index=True)
+    st.caption(f"Se ocultan solos después de {MINUTOS_DATOS_ABIERTOS} minutos o al cerrar la sesión.")
+    with st.form("form_editar_datos"):
+        st.markdown("**Corregir mis datos personales**")
+        nuevos = _campos_personales("editar", abiertos)
+        guardar = st.form_submit_button("Guardar cambios", type="primary")
+    if guardar:
+        try:
+            st.session_state["datos_abiertos"]["datos"] = cuentas.actualizar_datos_personales(bd, token, nuevos)
+        except cuentas.ErrorCuenta as error:
+            st.error(str(error))
+        else:
+            st.success("Datos guardados y cifrados de nuevo con tu llave pública.")
+    columna_1, columna_2 = st.columns(2)
+    columna_1.download_button("Descargar mis datos personales (JSON)",
+                              json.dumps(abiertos, ensure_ascii=False, indent=2).encode("utf-8"),
+                              file_name="mis_datos_personales.json", mime="application/json")
+    if columna_2.button("Ocultar mis datos"):
+        st.session_state.pop("datos_abiertos", None)
+        st.rerun()
+
+
+def _seccion_solicitudes(bd, token):
+    st.markdown("#### Solicitudes de acceso a mis datos")
+    filas = solicitudes.del_titular(bd, token)
+    if not filas:
+        st.caption("Nadie ha pedido ver tus datos personales. Si el administrador necesita contactarte, la solicitud "
+                   "aparece aquí y tú decides qué compartes y por cuánto tiempo.")
+        return
+    for fila in [f for f in filas if f["estado"] == "pendiente"]:
+        with st.container(border=True):
+            st.markdown(f"**{_sin_formato(fila['alias_solicitante'])}** (administrador) pide ver: "
+                        f"**{solicitudes.nombres_campos(fila['campos'])}**, durante "
+                        f"{solicitudes.DURACIONES[fila['minutos']]}. Solicitud del {_hora(fila['creada_en'])}.")
+            st.markdown(f"Motivo: {_sin_formato(fila['motivo'])}")
+            with st.form(f"form_decidir_{fila['id']}", clear_on_submit=True):
+                campos = st.multiselect("Datos que compartes", fila["campos"], default=fila["campos"],
+                                        format_func=cuentas.CAMPOS_PERSONALES.get, key=f"decidir_{fila['id']}_campos")
+                minutos = st.selectbox("Durante", list(solicitudes.DURACIONES), format_func=solicitudes.DURACIONES.get,
+                                       index=list(solicitudes.DURACIONES).index(fila["minutos"]),
+                                       key=f"decidir_{fila['id']}_minutos")
+                contrasena = st.text_input("Tu contraseña (abre tu llave privada para crear la copia compartida)",
+                                           type="password", key=f"decidir_{fila['id']}_contrasena")
+                columna_1, columna_2 = st.columns(2)
+                autorizar = columna_1.form_submit_button("Autorizar", type="primary")
+                rechazar = columna_2.form_submit_button("Rechazar")
+            if autorizar:
+                try:
+                    with st.spinner("Cifrando la copia con la llave pública del administrador…"):
+                        solicitudes.autorizar(bd, token, fila["id"], contrasena, campos, minutos)
+                except cuentas.ErrorCuenta as error:
+                    _bloqueada(error)
+                except solicitudes.ErrorSolicitud as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+            if rechazar:
+                try:
+                    solicitudes.rechazar(bd, token, fila["id"])
+                except solicitudes.ErrorSolicitud as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+    for fila in [f for f in filas if f["estado"] == "aprobada"]:
+        with st.container(border=True):
+            st.markdown(f"**{_sin_formato(fila['alias_solicitante'])}** puede ver "
+                        f"**{solicitudes.nombres_campos(fila['campos_autorizados'])}** hasta "
+                        f"{_hora(fila['expira_en'])}. Consultas hasta ahora: {fila['consultas']}.")
+            if st.button("Revocar ahora", key=f"revocar_{fila['id']}"):
+                try:
+                    solicitudes.revocar(bd, token, fila["id"])
+                except solicitudes.ErrorSolicitud as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+    st.dataframe(pd.DataFrame({
+        "solicitud": [_hora(f["creada_en"]) for f in filas],
+        "quién": [f["alias_solicitante"] for f in filas],
+        "datos pedidos": [solicitudes.nombres_campos(f["campos"]) for f in filas],
+        "datos compartidos": [solicitudes.nombres_campos(f["campos_autorizados"]) or "—" for f in filas],
+        "motivo": [f["motivo"] for f in filas],
+        "estado": [solicitudes.ESTADOS[f["estado"]] for f in filas],
+        "vence": [_hora(f["expira_en"]) for f in filas],
+        "consultas": [f["consultas"] for f in filas],
+        "última consulta": [_hora(f["ultima_consulta"]) for f in filas],
+    }), hide_index=True)
+    st.caption("Cada vez que el administrador abre los datos que compartiste, queda registrado aquí. Al vencer el "
+               "plazo, o si revocas el permiso, la copia compartida se borra.")
+
+
 def pestana_mis_datos(usuario):
     bd, error = base()
     if error:
@@ -401,47 +612,50 @@ def pestana_mis_datos(usuario):
         _cerrar_sesion("La cuenta ya no existe.")
         st.rerun()
     datos_usuario, datos_portafolio = titular["usuario"], titular["portafolio"]
+    completa = titular["llave"] is not None
+    if not completa:
+        _formulario_completar(bd, usuario, "mis_datos")
 
     st.markdown("Estos son **todos** los datos que la aplicación guarda sobre ti. Puedes consultarlos, descargarlos, "
                 "corregirlos o eliminarlos (Ley 1581 de 2012, artículo 8).")
     st.dataframe(pd.DataFrame([
         ("Alias", datos_usuario["alias"]),
-        ("Correo", datos_usuario["correo"] or "—"),
+        ("Nombre, correo, teléfono, dirección, ciudad y fecha de nacimiento",
+         "Cifrados con tu llave; se ven abajo con tu contraseña" if completa else "Pendientes de completar"),
+        ("Huella de tu llave pública", titular["llave"]["huella_llave_publica"] if completa else "—"),
         ("Contraseña", "Solo se guarda su hash bcrypt; no se puede ver."),
         ("Mayor de 18 años", "Sí" if datos_usuario["mayor_de_edad"] else "No"),
         ("Autorización del tratamiento", f"{_hora(datos_usuario['autorizacion_en'])}, política del "
                                          f"{datos_usuario['version_politica']}"),
         ("Historial de preguntas al agente", "Activado" if datos_usuario["historial_agente"] else "Desactivado"),
         ("Cuenta creada", _hora(datos_usuario["creado_en"])),
-        ("Último acceso", _hora(datos_usuario["ultimo_acceso"]) if datos_usuario["ultimo_acceso"] else "—"),
+        ("Último acceso", _hora(datos_usuario["ultimo_acceso"])),
         ("Efectivo ficticio", f"{datos_portafolio['efectivo']:,.2f} USD"),
         ("Inicio del portafolio", _hora(datos_portafolio["inicio_en"])),
         ("Operaciones registradas", str(len(titular["operaciones"]))),
         ("Preguntas al agente hoy", f"{registro_agente.consultas_hoy(bd, token)} de {config.AGENTE_CONSULTAS_DIARIAS}"),
         ("Mensajes guardados del agente", str(len(titular["historial_del_agente"]))),
+        ("Solicitudes de acceso a tus datos", str(len(titular["solicitudes_de_acceso"]))),
     ], columns=["dato", "valor"]), hide_index=True)
-    st.download_button("Descargar mis datos (JSON)",
+    st.download_button("Descargar el resto de mis datos (JSON)",
                        json.dumps(titular, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
                        file_name="mis_datos.json", mime="application/json")
 
-    st.markdown("#### Corregir mis datos")
-    columna_1, columna_2 = st.columns(2)
-    with columna_1.form("form_alias"):
+    if completa:
+        _seccion_datos_personales(bd, token)
+        _seccion_solicitudes(bd, token)
+        if solicitudes.es_admin(bd, token, correo_admin()):
+            import interfaz_admin
+            interfaz_admin.panel(bd, usuario)
+
+    st.markdown("#### Alias y contraseña")
+    with st.form("form_alias"):
         nuevo_alias = st.text_input("Alias", value=datos_usuario["alias"], max_chars=30)
         if st.form_submit_button("Guardar alias"):
             try:
                 st.session_state["sesion"]["alias"] = cuentas.actualizar_alias(bd, token, nuevo_alias)
             except cuentas.ErrorCuenta as error_alias:
                 st.error(str(error_alias))
-            else:
-                st.rerun()
-    with columna_2.form("form_correo"):
-        nuevo_correo = st.text_input("Correo", value=datos_usuario["correo"] or "")
-        if st.form_submit_button("Guardar correo"):
-            try:
-                cuentas.actualizar_correo(bd, token, nuevo_correo)
-            except cuentas.ErrorCuenta as error_correo:
-                st.error(str(error_correo))
             else:
                 st.rerun()
     with st.form("form_contrasena", clear_on_submit=True):
@@ -452,11 +666,12 @@ def pestana_mis_datos(usuario):
         repetida = columna_c.text_input("Repite la nueva", type="password")
         if st.form_submit_button("Cambiar la contraseña"):
             try:
-                cuentas.cambiar_contrasena(bd, token, actual, nueva, repetida)
+                with st.spinner("Cifrando tu llave privada con la contraseña nueva…"):
+                    cuentas.cambiar_contrasena(bd, token, actual, nueva, repetida)
             except cuentas.ErrorCuenta as error_clave:
-                st.error(str(error_clave))
+                _bloqueada(error_clave)
             else:
-                st.success("Contraseña cambiada.")
+                st.success("Contraseña cambiada. Tu llave privada quedó protegida con la contraseña nueva.")
 
     st.markdown("#### Historial del agente")
     activo = st.toggle("Guardar el historial de mis preguntas al agente", value=datos_usuario["historial_agente"],
@@ -482,8 +697,8 @@ def pestana_mis_datos(usuario):
         st.rerun()
 
     st.markdown("#### Revocar la autorización y eliminar la cuenta")
-    st.caption("Se borran de inmediato tu cuenta, tu correo, tu portafolio, tus operaciones y tu historial del agente. "
-               "No se puede deshacer.")
+    st.caption("Se borran de inmediato tu cuenta, tus llaves, tus datos personales, las solicitudes y copias "
+               "compartidas, tu portafolio, tus operaciones y tu historial del agente. No se puede deshacer.")
     eliminar = st.checkbox("Quiero revocar la autorización y eliminar mi cuenta.", key="confirmar_eliminar")
     if st.button("Eliminar mi cuenta", disabled=not eliminar):
         cuentas.eliminar_cuenta(bd, token)

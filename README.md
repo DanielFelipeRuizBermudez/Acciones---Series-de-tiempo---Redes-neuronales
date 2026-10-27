@@ -1,7 +1,7 @@
 # Predicción de acciones: series de tiempo (stdg) + aprendizaje profundo (appr)
 
 Dashboard en Streamlit que descarga precios con **yfinance**, los va guardando automáticamente y predice si
-la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con cuatro modelos:
+la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con cinco modelos:
 
 | Modelo | Materia | Qué hace | Archivo |
 |---|---|---|---|
@@ -9,6 +9,7 @@ la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con cuatro 
 | Prophet | Series de tiempo | Tendencia + estacionalidad diaria y semanal sobre log(precio) | `modelos_series.py` |
 | RNN simple | Aprendizaje profundo | Red recurrente sobre ventanas de las últimas velas | `modelos_redes.py` |
 | LSTM | Aprendizaje profundo | Igual, con celdas LSTM (memoria de largo plazo) | `modelos_redes.py` |
+| CNN de velas | Aprendizaje profundo | Red convolucional que mira una imagen de las últimas velas y da la probabilidad de que la hora siguiente suba | `velas_cnn.py` |
 
 Se comparan contra tres líneas base: *precio sin cambio*, *siempre sube* y *repite la última vela*.
 
@@ -62,8 +63,9 @@ Consulta cada 2 minutos con el mercado abierto y cada 30 minutos con el mercado 
 ### Qué se predice
 
 Con las velas de **1 hora**: dado el cierre de la última vela completa, ¿la vela siguiente cerrará arriba o abajo?
-Todos los modelos predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)`, y de ahí salen el
-precio predicho y la dirección. Se usan retornos y no precios porque el precio no es estacionario (la pestaña
+AR, Prophet, RNN y LSTM predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)` (regresión), y de
+ahí salen el precio predicho y la dirección. La **CNN de velas** responde directamente si sube o baja
+(clasificación) mirando una imagen de las últimas velas. Se usan retornos y no precios porque el precio no es estacionario (la pestaña
 *Análisis de la serie* lo muestra con la prueba ADF) y una red que predice precios aprende a copiar el último valor.
 
 Las velas de 2 minutos se usan para la vista en vivo: permiten ver, durante la hora predicha, si el precio va en la
@@ -71,7 +73,9 @@ dirección que dijeron los modelos.
 
 ### Entrenamiento (`entrenar.py`)
 
-1. **Características** por vela: log-retorno, rango `ln(High/Low)` y volumen relativo a su promedio reciente.
+1. **Entrada de los modelos**: solo el log-retorno de cada vela. AR, RNN y LSTM son autorregresivos: predicen el
+   retorno siguiente con los retornos anteriores (la RNN y la LSTM son autorregresivos no lineales). No se usan el
+   volumen ni otras variables, porque para pronosticar varias horas habría que conocerlas también en el futuro.
 2. **División temporal** 70 / 15 / 15 (entrenamiento / validación / prueba), sin mezclar el orden. Entrenamiento +
    validación forman el tramo de *desarrollo*; la prueba solo se usa al final.
 3. **Ventanas deslizantes**: para las redes, cada muestra son las últimas `ventana` velas; el objetivo es el
@@ -88,12 +92,28 @@ dirección que dijeron los modelos.
      tasa de aprendizaje {0.01, 0.05, 0.1}. Los pesos se ajustan con **descenso de gradiente estocástico** (SGD,
      sin momento) sobre lotes de 32 ventanas, minimizando el MSE, con dropout de 0.2 y *early stopping*
      (paciencia de 10 épocas, máximo 100).
-   Las rejillas (`REJILLA_REDES`, `PROPHET_REJILLA`) y el optimizador se cambian en `config.py`. Cada valor nuevo
-   multiplica el tiempo de entrenamiento.
+   - CNN de velas: velas por imagen {10, 20} × filtros {16, 32} × tasa de aprendizaje {0.01, 0.05}, con SGD,
+     entropía cruzada binaria, dropout de 0.2 y el mismo *early stopping*. Se califica con la entropía cruzada
+     promedio de los pliegues.
+   Las rejillas (`REJILLA_REDES`, `REJILLA_CNN`, `PROPHET_REJILLA`) y el optimizador se cambian en `config.py`. Cada
+   valor nuevo multiplica el tiempo de entrenamiento.
 5. **Evaluación en prueba**: acierto de dirección con su margen de error al 95%, error medio del precio y RMSE del
-   retorno. Prophet se evalúa reajustándose una vez por día de prueba, sin ver nunca datos futuros.
+   retorno. Prophet se evalúa reajustándose una vez por día de prueba, sin ver nunca datos futuros. En los modelos
+   de regresión una predicción acierta si el signo del retorno predicho coincide con el del real; en la CNN, si da
+   más de 50% y la hora sube o menos de 50% y baja.
 
 Todo queda en `modelos_entrenados/<TICKER>_1h/` y el dashboard lo carga automáticamente.
+
+### CNN de velas
+
+Cada muestra es una **imagen** de las últimas velas de 1 hora, de 40 píxeles de alto y 4 de ancho por vela: verde si
+la vela cerró por encima de su apertura y roja si cerró por debajo, con el cuerpo (de la apertura al cierre) y la
+mecha (del mínimo al máximo). La altura va del mínimo al máximo de esas velas, así que la red ve la forma del
+movimiento y no el nivel del precio. La etiqueta es 1 si la hora siguiente cerró arriba y 0 si no.
+
+La red tiene dos bloques de convolución (filtros de 3 × 3 con ReLU) y *max pooling* de 2 × 2, una capa de dropout y
+una neurona de salida con sigmoide, que da la probabilidad de que la hora siguiente suba. Las convoluciones aprenden
+a reconocer patrones locales, como varias velas rojas seguidas o una mecha larga, en cualquier parte de la imagen.
 
 ### Prophet en una línea
 
@@ -105,8 +125,7 @@ cada componente por separado.
 
 Además de la próxima hora, el dashboard pronostica de 1 a 35 horas de mercado hacia adelante con el modelo ganador
 de cada tipo. AR, RNN y LSTM lo hacen de forma **recursiva**: predicen una hora, toman esa predicción como dato y
-siguen con la siguiente (en las redes, el rango y el volumen futuros se fijan en su promedio reciente, porque no los
-predicen). Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
+siguen con la siguiente. Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
 de las últimas 10 sesiones para compararlo con lo que pasó, y calcular el error promedio y el acierto de dirección
 según el horizonte. La franja gris es el rango del 80% de una caminata aleatoria con la volatilidad reciente.
 
@@ -118,15 +137,15 @@ siguiente, solo con información disponible hasta ese momento (no hay ventas en 
 | Estrategia | Regla |
 |---|---|
 | Comprar y mantener | Compra al inicio y no vende: la referencia |
-| Cruce de medias 20/50 | Comprada mientras el promedio de 20 horas está por encima del de 50 horas |
-| RSI(14) 30/70 | Compra cuando el RSI baja de 30 y vende cuando supera 70 |
-| Señal de cada modelo | Comprada cuando el retorno predicho para la próxima hora supera un umbral |
-| Consenso de modelos | Comprada cuando más de la mitad de los modelos predice subida |
+| 3 velas seguidas | Compra tras 3 velas rojas seguidas (el precio viene bajando y se espera un rebote), vende tras 3 verdes seguidas y si no mantiene lo que venía haciendo |
+| CNN de velas | Comprada cuando la CNN da más de 50% de probabilidad de que la hora siguiente suba |
 
-El backtest usa el periodo de prueba del entrenamiento, donde las predicciones de los modelos son fuera de muestra,
+La pestaña muestra la imagen que está mirando la CNN en este momento y la probabilidad que le asigna a la próxima
+hora. El backtest usa el periodo de prueba del entrenamiento, donde las predicciones de la CNN son fuera de muestra,
 cobra un costo en cada compra y en cada venta (0,05% por defecto, ajustable en la pestaña) y reporta el retorno total,
 la diferencia frente a comprar y mantener, la máxima caída, el número de operaciones, el porcentaje de operaciones
-ganadoras, el tiempo invertido y el Sharpe anualizado. Los parámetros de las reglas están en `config.py`.
+ganadoras, el tiempo invertido y el Sharpe anualizado. El número de velas seguidas (`VELAS_SEGUIDAS`) y el umbral de
+la CNN (`CNN_UMBRAL`) están en `config.py`.
 
 ### Agente (pestaña *Agente*)
 
@@ -140,7 +159,7 @@ hay que iniciar sesión, y cada cuenta tiene 20 preguntas por día.
 
 | Momento | Qué revisa | Qué hace |
 |---|---|---|
-| Entrada | Nombres (Microsoft Presidio con spaCy en español, y frases como "me llamo…"), cédulas, correos, teléfonos y números de cuenta o tarjeta (expresiones regulares) | Los reemplaza por [NOMBRE], [DOCUMENTO], [CORREO], [TELEFONO] o [CUENTA] antes de enviar la pregunta |
+| Entrada | Nombres (Microsoft Presidio con spaCy en español, y frases como "me llamo…"), cédulas, correos, teléfonos, números de cuenta o tarjeta, direcciones colombianas y fechas de nacimiento (expresiones regulares) | Los reemplaza por [NOMBRE], [DOCUMENTO], [CORREO], [TELEFONO], [CUENTA], [DIRECCION] o [FECHA] antes de enviar la pregunta |
 | Entrada | Intentos de *prompt injection*: ignorar o revelar las instrucciones, cambiar el papel del agente, "modo desarrollador", marcas de mensajes de sistema | Bloquea la pregunta sin enviarla |
 | Entrada | Preguntas de más de 500 caracteres | Las bloquea |
 | Salida | Recomendaciones personales de inversión ("te recomiendo comprar", "deberías vender", "es buen momento para…") | Bloquea la respuesta y explica por qué |
@@ -167,8 +186,9 @@ disponibles en la pestaña se definen en `GEMINI_MODELOS` (`config.py`).
 
 ### Cuentas y portafolio simulado (pestañas *Portafolio simulado* y *Mis datos*)
 
-Cada usuario se registra con alias, correo y contraseña y recibe 10.000 USD ficticios para comprar y vender las
-acciones que tienen modelos entrenados. Las reglas están en `portafolio.py` y en la pestaña:
+Cada usuario se registra con alias, contraseña y sus datos personales (nombre completo, correo, teléfono, dirección,
+ciudad y fecha de nacimiento) y recibe 10.000 USD ficticios para comprar y vender las acciones que tienen modelos
+entrenados. Las reglas están en `portafolio.py` y en la pestaña:
 
 - Solo con el mercado abierto y al último precio de 2 minutos, que debe tener menos de 10 minutos.
 - Acciones enteras, comisión simulada del 0,1% por operación, sin comprar sin saldo ni vender lo que no se tiene.
@@ -178,22 +198,47 @@ acciones que tienen modelos entrenados. Las reglas están en `portafolio.py` y e
 
 Cada operación se valida en el servidor dentro de la misma transacción que la registra, así que el efectivo solo
 cambia por una operación válida; además, la pestaña verifica que el efectivo guardado coincida con la suma de las
-operaciones. En *Mis datos* el usuario ve todo lo que se guarda sobre él, lo descarga, corrige su alias y su correo,
-cambia su contraseña, reinicia el portafolio o elimina su cuenta (Ley 1581). La política de tratamiento de datos está
-en `politica_datos.md` y se muestra en el registro y al pie de la aplicación.
+operaciones. En *Mis datos* el usuario ve todo lo que se guarda sobre él, lo descarga, corrige su alias y sus datos
+personales, cambia su contraseña, responde las solicitudes de acceso, reinicia el portafolio o elimina su cuenta
+(Ley 1581). La política de tratamiento de datos está en `politica_datos.md` y se muestra en el registro y al pie de la
+aplicación.
+
+### El usuario gobierna sus datos personales (`llaves.py`, `solicitudes.py`)
+
+| Qué | Cómo |
+|---|---|
+| Par de llaves por usuario | RSA de 3072 bits, creado al registrarse |
+| Llave privada | Cifrada con AES-256-GCM, con una llave derivada de la contraseña (PBKDF2-HMAC-SHA256, 600.000 iteraciones y sal aleatoria). Sin la contraseña nadie la abre |
+| Datos personales | Sobre híbrido: los datos con AES-256-GCM y esa llave con RSA-OAEP de la llave pública del usuario. El sobre va atado al token del usuario |
+| Inicio de sesión | Por el índice HMAC del correo; no hace falta descifrar nada |
+| Ver o corregir los datos | El titular escribe su contraseña en *Mis datos*; se ocultan solos a los 5 minutos |
+| Cambio de contraseña | La llave privada se vuelve a cifrar con la contraseña nueva |
+
+**Solicitudes de acceso.** El administrador es la cuenta cuyo correo está en el secreto `CORREO_ADMIN`. No puede leer
+datos de nadie: pide acceso a una cuenta con un motivo, los datos que necesita y un plazo (15 minutos, 1 hora o 24
+horas). El titular ve la solicitud al iniciar sesión y la rechaza o la autoriza con su contraseña, eligiendo qué datos
+comparte y por cuánto tiempo. Al autorizar, su llave privada abre su sobre y crea una copia, solo con esos datos,
+cifrada con la llave pública del administrador, que la abre con su propia contraseña. Cada consulta queda registrada
+y el titular la ve; al vencer el plazo, o si el titular revoca el permiso, la copia se borra.
+
+Las cuentas creadas antes de este cambio completan sus datos la próxima vez que entran al portafolio: se crean sus
+llaves, se acepta la política nueva y se borra la copia del correo que estaba cifrada con `CLAVE_DATOS`.
 
 **Base de datos (`base_datos.py`).** En el equipo local se usa SQLite (`base_datos/usuarios.db`, fuera del
 repositorio). En Streamlit Community Cloud el disco se borra con cada reinicio, así que allá se usa una base Postgres
-gratuita (por ejemplo, de [Neon](https://neon.com)): basta con agregar estas líneas en los *Secrets* de la app:
+gratuita (por ejemplo, de [Neon](https://neon.com)): basta con agregar estas líneas en los *Secrets* de la app. Las
+tablas nuevas se crean solas al arrancar.
 
 ```toml
 DATABASE_URL = "postgresql://usuario:contraseña@servidor/basededatos?sslmode=require"
 CLAVE_DATOS = "una frase larga y aleatoria"
+CORREO_ADMIN = "correo-de-la-cuenta-administradora@ejemplo.com"
 ```
 
-`CLAVE_DATOS` cifra los correos; si se cambia o se pierde, los correos guardados ya no se pueden leer y nadie podría
-iniciar sesión, así que se define una sola vez. Las contraseñas se guardan con hash bcrypt, la cuenta se bloquea 15
-minutos tras 5 intentos fallidos y la sesión se cierra tras 30 minutos sin actividad.
+`CLAVE_DATOS` genera la llave del índice HMAC de los correos; si se cambia o se pierde, nadie podría iniciar sesión,
+así que se define una sola vez. Las contraseñas se guardan con hash bcrypt, la cuenta se bloquea 15 minutos tras 5
+intentos fallidos (también al abrir datos personales o autorizar solicitudes) y la sesión se cierra tras 30 minutos
+sin actividad.
 
 ## Cómo leer los resultados
 

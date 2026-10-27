@@ -3,9 +3,12 @@
 En el equipo local usa un archivo SQLite (base_datos/usuarios.db). Si se define DATABASE_URL, usa esa base Postgres,
 que es lo que permite que las cuentas sobrevivan a los reinicios de Streamlit Community Cloud.
 
-El correo se guarda cifrado (Fernet) en una tabla aparte y se busca por un índice HMAC, así que la base nunca tiene el
-correo en texto plano. El portafolio, las operaciones, el uso del agente y su historial solo se relacionan con el
-usuario por su token aleatorio. La auditoría del agente no guarda ni el token ni el texto de las preguntas.
+El correo se busca por un índice HMAC, así que la base nunca tiene el correo en texto plano. El correo y los demás datos
+personales (nombre, dirección, ciudad, teléfono y fecha de nacimiento) se guardan en un sobre cifrado con la llave
+pública del usuario (llaves.py): solo su llave privada, protegida con su contraseña, lo puede abrir. Las cuentas
+creadas antes de ese cambio tienen todavía una copia del correo cifrada con Fernet, que se borra cuando el usuario
+completa sus datos. El portafolio, las operaciones, el uso del agente y su historial solo se relacionan con el usuario
+por su token aleatorio. La auditoría del agente no guarda ni el token ni el texto de las preguntas.
 """
 
 import base64
@@ -80,6 +83,41 @@ _TABLAS = (
         resultado TEXT NOT NULL,
         datos_detectados TEXT,
         motivo TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS llaves (
+        token TEXT PRIMARY KEY REFERENCES usuarios (token) ON DELETE CASCADE,
+        publica TEXT NOT NULL,
+        privada_cifrada TEXT NOT NULL,
+        sal TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        iteraciones INTEGER NOT NULL,
+        creada_en TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS datos_personales (
+        token TEXT PRIMARY KEY REFERENCES usuarios (token) ON DELETE CASCADE,
+        sobre TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS solicitudes_acceso (
+        id {clave_autonumerica},
+        titular TEXT NOT NULL REFERENCES usuarios (token) ON DELETE CASCADE,
+        solicitante TEXT NOT NULL REFERENCES usuarios (token) ON DELETE CASCADE,
+        motivo TEXT NOT NULL,
+        campos TEXT NOT NULL,
+        minutos INTEGER NOT NULL CHECK (minutos > 0),
+        estado TEXT NOT NULL CHECK (estado IN ('pendiente', 'aprobada', 'rechazada', 'revocada', 'expirada',
+                                               'cancelada')),
+        creada_en TEXT NOT NULL,
+        decidida_en TEXT,
+        expira_en TEXT,
+        campos_autorizados TEXT,
+        sobre TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS solicitudes_por_titular ON solicitudes_acceso (titular, estado)",
+    """CREATE TABLE IF NOT EXISTS accesos_datos (
+        id {clave_autonumerica},
+        solicitud_id BIGINT NOT NULL REFERENCES solicitudes_acceso (id) ON DELETE CASCADE,
+        visto_en TEXT NOT NULL
     )""",
 )
 

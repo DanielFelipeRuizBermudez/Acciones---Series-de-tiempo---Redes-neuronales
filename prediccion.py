@@ -11,6 +11,7 @@ import datos
 import modelos_redes
 import modelos_series
 import preparacion
+import velas_cnn
 
 
 def cargar_artefactos(ticker, intervalo=config.INTERVALO_MODELO):
@@ -25,7 +26,19 @@ def cargar_artefactos(ticker, intervalo=config.INTERVALO_MODELO):
         ruta = carpeta / f"{tipo}.keras"
         if ruta.exists():
             artefactos["redes"][tipo] = modelos_redes.cargar_modelo(ruta)
+    ruta_cnn = carpeta / "cnn.keras"
+    artefactos["cnn"] = velas_cnn.cargar_modelo(ruta_cnn) if ruta_cnn.exists() and "cnn" in resumen else None
     return artefactos
+
+
+def cnn_siguiente(df_completas, artefactos):
+    """(probabilidad de que suba la próxima vela, imagen que mira la CNN), o (None, None) si no hay CNN entrenada."""
+    if not artefactos or artefactos.get("cnn") is None:
+        return None, None
+    velas = artefactos["resumen"]["cnn"]["velas"]
+    if len(df_completas) < velas:
+        return None, None
+    return velas_cnn.probabilidad_actual(artefactos["cnn"], df_completas, velas)
 
 
 def _fila(modelo, cierre, retorno):

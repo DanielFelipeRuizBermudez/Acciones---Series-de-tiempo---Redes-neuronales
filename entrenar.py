@@ -1,4 +1,4 @@
-"""Entrena y evalúa AR(p), Prophet, RNN y LSTM para una acción.
+"""Entrena y evalúa AR(p), Prophet, RNN, LSTM y la CNN de velas para una acción.
 
 Uso:
     python entrenar.py                         # AAPL con velas de 1 hora
@@ -20,6 +20,7 @@ import evaluacion
 import modelos_redes
 import modelos_series
 import preparacion
+import velas_cnn
 
 
 def _fecha(marca):
@@ -94,7 +95,7 @@ def main():
     salida = config.directorio_modelos(ticker, intervalo)
     salida.mkdir(parents=True, exist_ok=True)
 
-    print("\n[1/4] AR(p) sobre log-retornos")
+    print("\n[1/5] AR(p) sobre log-retornos")
     p, modelo_ar, tabla_ar = modelos_series.buscar_ar(f, cortes, k=k)
     pred_ar = modelos_series.predecir_ar(modelo_ar, f, p, a, b)
     predicciones[f"AR({p})"] = pred_ar
@@ -104,7 +105,7 @@ def main():
     print(f"  p elegido = {p}")
 
     if not args.sin_prophet:
-        print("\n[2/4] Prophet sobre log(precio)")
+        print("\n[2/5] Prophet sobre log(precio)")
         if args.rapido:
             parametros = modelos_series.parametros_prophet()
             dias = config.PROPHET_DIAS_ENTRE_REAJUSTES_VALIDACION
@@ -129,7 +130,7 @@ def main():
     resumen["redes"] = {}
     for paso, tipo in ((3, "rnn"), (4, "lstm")):
         nombre = modelos_redes.TIPOS[tipo]
-        print(f"\n[{paso}/4] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
+        print(f"\n[{paso}/5] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
 
         def informar(numero, total, fila):
             print(f"  {numero:>2}/{total} ventana={fila['ventana']:<3} unidades={fila['unidades']:<3} "
@@ -150,6 +151,27 @@ def main():
               f"durante {elegido['epocas_finales']} épocas")
         tabla.to_csv(salida / f"busqueda_{tipo}.csv", index=False)
         resumen["redes"][tipo] = {**mejor["fila"], "optimizador": config.OPTIMIZADOR}
+
+    print(f"\n[5/5] {velas_cnn.NOMBRE}: clasificación de imágenes de velas (optimizador {config.OPTIMIZADOR})")
+
+    def informar_cnn(numero, total, fila):
+        print(f"  {numero:>2}/{total} velas={fila['velas']:<3} filtros={fila['filtros']:<3} tasa={fila['tasa']} "
+              f"-> entropía_cv={fila['perdida_cv']:.4f} ±{fila['desv_pliegues']:.4f} "
+              f"acierto_cv={fila['acierto_cv_pct']:.1f}% ({fila['epocas_promedio']:.0f} épocas en promedio)")
+
+    rejilla_cnn = config.REJILLA_CNN_RAPIDA if args.rapido else config.REJILLA_CNN
+    mejor_cnn, tabla_cnn = velas_cnn.buscar_hiperparametros(df, f, cortes, rejilla_cnn, k, informar_cnn)
+    probabilidad = velas_cnn.probabilidades(mejor_cnn["modelo"], mejor_cnn["conjunto"], a, b)
+    predicciones[velas_cnn.NOMBRE] = probabilidad
+    filas_metricas.append(evaluacion.metricas(velas_cnn.NOMBRE, r_real, cierre_actual,
+                                              direccion=probabilidad > config.CNN_UMBRAL))
+    velas_cnn.guardar_modelo(mejor_cnn["modelo"], salida / "cnn.keras")
+    mejor_cnn["historial"].to_csv(salida / "historial_cnn.csv", index=False)
+    tabla_cnn.to_csv(salida / "busqueda_cnn.csv", index=False)
+    resumen["cnn"] = mejor_cnn["fila"]
+    elegida = mejor_cnn["fila"]
+    print(f"  elegido: velas={elegida['velas']}, filtros={elegida['filtros']}, tasa={elegida['tasa']}; reentrenado con "
+          f"todo el desarrollo durante {elegida['epocas_finales']} épocas")
 
     joblib.dump(escalado, salida / "escalado.pkl")
     tabla = evaluacion.tabla_metricas(filas_metricas)

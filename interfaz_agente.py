@@ -15,7 +15,7 @@ PREGUNTAS_RAPIDAS = [
     "¿Qué tan confiables son los modelos?",
 ]
 NOMBRES_DATOS = {"NOMBRE": "nombre", "DOCUMENTO": "documento", "CORREO": "correo", "TELEFONO": "teléfono",
-                 "CUENTA": "número de cuenta"}
+                 "CUENTA": "número de cuenta", "DIRECCION": "dirección", "FECHA": "fecha de nacimiento"}
 RESULTADOS = {
     "respondida": "Respondidas",
     "cifras_ocultas": "Respondidas con cifras ocultas",
@@ -115,9 +115,10 @@ def pestana_agente(usuario, ticker, clave_api, construir_contexto):
     usadas = registro_agente.consultas_hoy(bd, token)
     st.info(
         "Antes de salir de la app, cada pregunta pasa por un filtro que reemplaza nombres, documentos, correos, "
-        "teléfonos y números de cuenta por etiquetas como [NOMBRE]. Google Gemini recibe solo esa versión, por medio de "
-        "LiteLLM, junto con los datos de la acción que calcula el dashboard; no recibe tu alias, tu correo ni tu "
-        f"contraseña. Hoy van {usadas} de {config.AGENTE_CONSULTAS_DIARIAS} preguntas. El historial de preguntas está "
+        "teléfonos, números de cuenta, direcciones y fechas de nacimiento por etiquetas como [NOMBRE]. Google Gemini "
+        "recibe solo esa versión, por medio de LiteLLM, junto con los datos de la acción que calcula el dashboard; "
+        f"no recibe tu alias, tus datos personales ni tu contraseña. Hoy van {usadas} de "
+        f"{config.AGENTE_CONSULTAS_DIARIAS} preguntas. El historial de preguntas está "
         f"{'activado' if guardar else 'desactivado'} (se cambia en Mis datos)."
     )
     modelo = st.selectbox("Modelo de Gemini", config.GEMINI_MODELOS,

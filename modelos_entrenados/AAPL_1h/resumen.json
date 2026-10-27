@@ -1,55 +1,53 @@
 {
   "ticker": "AAPL",
   "intervalo": "1h",
-  "entrenado_en": "2026-10-21 17:37",
+  "entrenado_en": "2026-10-27 16:50",
   "caracteristicas": [
-    "log_ret",
-    "rango",
-    "vol_rel"
+    "log_ret"
   ],
-  "velas": 3521,
+  "velas": 3549,
   "tramos": {
     "entrenamiento": {
       "desde": "2024-10-11 15:30",
-      "hasta": "2026-03-17 15:30",
-      "velas": 2464
+      "hasta": "2026-03-20 14:30",
+      "velas": 2484
     },
     "validacion": {
-      "desde": "2026-03-18 09:30",
-      "hasta": "2026-07-07 11:30",
-      "velas": 528
+      "desde": "2026-03-20 15:30",
+      "hasta": "2026-07-10 14:30",
+      "velas": 532
     },
     "prueba": {
-      "desde": "2026-07-07 12:30",
-      "hasta": "2026-10-21 14:30",
-      "velas": 528
+      "desde": "2026-07-10 15:30",
+      "hasta": "2026-10-27 14:30",
+      "velas": 532
     }
   },
   "validacion_cruzada": {
     "pliegues": 3,
     "tramos": [
       {
-        "entrena_hasta": "2025-03-20 14:30",
-        "valida_desde": "2025-03-20 15:30",
-        "valida_hasta": "2025-08-25 10:30"
+        "entrena_hasta": "2025-03-21 13:30",
+        "valida_desde": "2025-03-21 14:30",
+        "valida_hasta": "2025-08-26 15:30"
       },
       {
-        "entrena_hasta": "2025-08-25 10:30",
-        "valida_desde": "2025-08-25 11:30",
-        "valida_hasta": "2026-01-29 10:30"
+        "entrena_hasta": "2025-08-26 15:30",
+        "valida_desde": "2025-08-27 09:30",
+        "valida_hasta": "2026-02-04 09:30"
       },
       {
-        "entrena_hasta": "2026-01-29 10:30",
-        "valida_desde": "2026-01-29 11:30",
-        "valida_hasta": "2026-07-07 11:30"
+        "entrena_hasta": "2026-02-04 09:30",
+        "valida_desde": "2026-02-04 10:30",
+        "valida_hasta": "2026-07-10 14:30"
       }
     ]
   },
   "ar": {
     "p": 1,
-    "intercepto": 0.00010301852784380112,
+    "intercepto": 0.000104708458829424,
     "coeficientes": [
-      0.032515755824762474
+      0.032667856481676284
     ]
   },
   "prophet": {
@@ -60,29 +58,43 @@
   "redes": {
     "rnn": {
       "ventana": 7,
-      "unidades": 32,
+      "unidades": 64,
       "capas": 1,
       "dropout": 0.2,
-      "tasa": 0.01,
-      "rmse_cv_pct": 0.6731432300659577,
-      "desv_pliegues_pct": 0.15030267834023955,
-      "epocas_promedio": 12.333333333333334,
-      "parametros": 1185,
+      "tasa": 0.1,
+      "rmse_cv_pct": 0.6755228792986057,
+      "desv_pliegues_pct": 0.13809036938231284,
+      "epocas_promedio": 12.0,
+      "parametros": 4289,
       "epocas_finales": 12,
       "optimizador": "SGD"
     },
     "lstm": {
-      "ventana": 7,
-      "unidades": 32,
+      "ventana": 14,
+      "unidades": 64,
       "capas": 1,
       "dropout": 0.2,
       "tasa": 0.01,
-      "rmse_cv_pct": 0.6706723016886047,
-      "desv_pliegues_pct": 0.15178225927455,
-      "epocas_promedio": 7.333333333333333,
-      "parametros": 4641,
-      "epocas_finales": 7,
+      "rmse_cv_pct": 0.6730017555871868,
+      "desv_pliegues_pct": 0.13589120118639764,
+      "epocas_promedio": 34.0,
+      "parametros": 16961,
+      "epocas_finales": 34,
       "optimizador": "SGD"
     }
+  },
+  "cnn": {
+    "velas": 20,
+    "filtros": 32,
+    "tasa": 0.01,
+    "dropout": 0.2,
+    "perdida_cv": 0.6929497520128886,
+    "desv_pliegues": 0.0002277069077698648,
+    "acierto_cv_pct": 50.30946036179861,
+    "epocas_promedio": 2.3333333333333335,
+    "epocas_finales": 2,
+    "optimizador": "SGD",
+    "alto": 40,
+    "ancho_vela": 4
   }
 }

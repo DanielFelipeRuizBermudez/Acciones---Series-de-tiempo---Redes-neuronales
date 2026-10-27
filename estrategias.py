@@ -1,7 +1,13 @@
 """Estrategias de compra y venta y su backtest.
 
-Cada estrategia decide al cierre de una vela si queda comprada (1) o fuera del mercado (0) durante la vela
-siguiente, usando solo información disponible hasta ese cierre. No se usan ventas en corto.
+Cada estrategia decide al cierre de una vela si queda comprada (1) o fuera del mercado (0) durante la vela siguiente,
+usando solo información disponible hasta ese cierre. No se usan ventas en corto.
+
+- Comprar y mantener: compra al inicio y no vende. Es la referencia.
+- Tres velas: después de VELAS_SEGUIDAS velas rojas seguidas compra (el precio viene bajando y se espera un rebote);
+  después de VELAS_SEGUIDAS verdes seguidas vende; en cualquier otro caso mantiene lo que venía haciendo.
+- CNN de velas: comprada cuando la red convolucional, mirando la imagen de las últimas velas, da una probabilidad de
+  subida mayor que CNN_UMBRAL.
 """
 
 import numpy as np
@@ -10,50 +16,34 @@ import pandas as pd
 import config
 
 NOMBRE_BH = "Comprar y mantener"
-NOMBRE_CRUCE = f"Cruce de medias {config.SMA_RAPIDA}/{config.SMA_LENTA}"
-NOMBRE_RSI = f"RSI({config.RSI_PERIODO}) {config.RSI_COMPRA}/{config.RSI_VENTA}"
-NOMBRE_CONSENSO = "Consenso de modelos"
+NOMBRE_VELAS = f"{config.VELAS_SEGUIDAS} velas seguidas"
+NOMBRE_CNN = "CNN de velas"
+COLUMNA_CNN = "CNN de velas"
 
 
-def media_movil(cierre, n):
-    return cierre.rolling(n, min_periods=n).mean()
+def colores(velas):
+    """1 si la vela es verde (cerró por encima de su apertura), -1 si es roja, 0 si cerró igual."""
+    return np.sign(velas["Close"].to_numpy(dtype=float) - velas["Open"].to_numpy(dtype=float))
 
 
-def rsi(cierre, n=config.RSI_PERIODO):
-    """Índice de fuerza relativa con el suavizado de Wilder."""
-    cambio = cierre.diff()
-    subida = cambio.clip(lower=0).ewm(alpha=1 / n, min_periods=n, adjust=False).mean()
-    bajada = (-cambio.clip(upper=0)).ewm(alpha=1 / n, min_periods=n, adjust=False).mean()
-    return 100 - 100 / (1 + subida / bajada)
-
-
-def posicion_cruce(cierre, rapida=config.SMA_RAPIDA, lenta=config.SMA_LENTA):
-    return (media_movil(cierre, rapida) > media_movil(cierre, lenta)).astype(float)
-
-
-def posicion_rsi(cierre, n=config.RSI_PERIODO, compra=config.RSI_COMPRA, venta=config.RSI_VENTA):
-    """Compra cuando el RSI baja de `compra` y vende cuando supera `venta`; entre medio mantiene el estado."""
-    valores = rsi(cierre, n).to_numpy()
-    posicion = np.zeros(len(valores))
+def posicion_tres_velas(velas, seguidas=config.VELAS_SEGUIDAS):
+    """Compra tras `seguidas` velas rojas seguidas, vende tras `seguidas` verdes y si no mantiene el estado."""
+    color = colores(velas)
+    posicion = np.zeros(len(color))
     dentro = 0.0
-    for i, valor in enumerate(valores):
-        if not np.isnan(valor):
-            if dentro == 0 and valor < compra:
+    for i in range(len(color)):
+        if i >= seguidas - 1:
+            ultimas = color[i - seguidas + 1: i + 1]
+            if (ultimas < 0).all():
                 dentro = 1.0
-            elif dentro == 1 and valor > venta:
+            elif (ultimas > 0).all():
                 dentro = 0.0
         posicion[i] = dentro
-    return pd.Series(posicion, index=cierre.index)
+    return pd.Series(posicion, index=velas.index)
 
 
-def posicion_modelo(retorno_predicho, umbral):
-    return (np.asarray(retorno_predicho, dtype=float) > umbral).astype(float)
-
-
-def posicion_consenso(predicciones, umbral):
-    """Comprado cuando más de la mitad de los modelos predice un retorno mayor que el umbral."""
-    votos = (predicciones.to_numpy(dtype=float) > umbral).sum(axis=1)
-    return (votos > predicciones.shape[1] / 2).astype(float)
+def posicion_cnn(probabilidades, umbral=config.CNN_UMBRAL):
+    return (np.asarray(probabilidades, dtype=float) > umbral).astype(float)
 
 
 def simular(posicion, retorno_siguiente, costo):
@@ -93,37 +83,33 @@ def metricas(nombre, posicion, neto, capital):
     }
 
 
-def backtest(cierre, predicciones=None, costo_pct=config.COSTO_OPERACION_PCT, umbral_pct=0.0, velas=512):
-    """Simula todas las estrategias en el mismo periodo.
+def backtest(velas, predicciones=None, costo_pct=config.COSTO_OPERACION_PCT, ultimas=512):
+    """Simula las estrategias en el mismo periodo.
 
-    `cierre`: serie de cierres por hora con toda la historia disponible.
-    `predicciones`: el archivo predicciones_prueba.csv del entrenamiento (fuera de muestra). Si existe, el
-    periodo es el de prueba; si no, las últimas `velas` velas y solo estrategias técnicas.
+    `velas`: velas de 1 hora completas (Open, High, Low, Close) con toda la historia disponible.
+    `predicciones`: el archivo predicciones_prueba.csv del entrenamiento (fuera de muestra). Si existe, el periodo es
+    el de prueba y se incluye la CNN; si no, se usan las últimas `ultimas` velas y solo las estrategias sin modelos.
     Devuelve (capital por estrategia, tabla de métricas).
     """
-    costo, umbral = costo_pct / 100, np.log1p(umbral_pct / 100)
-    cierre_utc = cierre.copy()
-    cierre_utc.index = cierre_utc.index.tz_convert("UTC")
+    costo = costo_pct / 100
+    velas_utc = velas.copy()
+    velas_utc.index = velas_utc.index.tz_convert("UTC")
+    cierre = velas_utc["Close"]
     if predicciones is not None:
         referencias = pd.DatetimeIndex(pd.to_datetime(predicciones["marca_referencia"], utc=True))
         objetivos = pd.DatetimeIndex(pd.to_datetime(predicciones["marca_objetivo"], utc=True))
         retorno = np.expm1(predicciones["retorno_real"].to_numpy(dtype=float))
     else:
-        referencias = cierre_utc.index[-velas - 1:-1]
-        objetivos = cierre_utc.index[-velas:]
-        retorno = (cierre_utc.shift(-1) / cierre_utc - 1).loc[referencias].to_numpy()
+        referencias = cierre.index[-ultimas - 1:-1]
+        objetivos = cierre.index[-ultimas:]
+        retorno = (cierre.shift(-1) / cierre - 1).loc[referencias].to_numpy()
 
     posiciones = {
         NOMBRE_BH: np.ones(len(referencias)),
-        NOMBRE_CRUCE: posicion_cruce(cierre_utc).reindex(referencias).fillna(0).to_numpy(),
-        NOMBRE_RSI: posicion_rsi(cierre_utc).reindex(referencias).fillna(0).to_numpy(),
+        NOMBRE_VELAS: posicion_tres_velas(velas_utc).reindex(referencias).fillna(0).to_numpy(),
     }
-    if predicciones is not None:
-        columnas = [c for c in predicciones.columns if c.startswith("AR(") or c in ("Prophet", "RNN simple", "LSTM")]
-        for columna in columnas:
-            posiciones[f"Señal de {columna}"] = posicion_modelo(predicciones[columna], umbral)
-        if len(columnas) >= 2:
-            posiciones[NOMBRE_CONSENSO] = posicion_consenso(predicciones[columnas], umbral)
+    if predicciones is not None and COLUMNA_CNN in predicciones:
+        posiciones[NOMBRE_CNN] = posicion_cnn(predicciones[COLUMNA_CNN].fillna(0))
 
     capitales, filas = {}, []
     for nombre, posicion in posiciones.items():
@@ -136,29 +122,25 @@ def backtest(cierre, predicciones=None, costo_pct=config.COSTO_OPERACION_PCT, um
     return curvas, tabla
 
 
-def senales_actuales(cierre, tabla_siguiente=None, umbral_pct=0.0):
+def senales_actuales(velas, probabilidad_cnn=None, seguidas=config.VELAS_SEGUIDAS):
     """Posición que tomaría cada estrategia para la próxima vela con los datos más recientes."""
-    umbral = np.log1p(umbral_pct / 100)
-    rapida = media_movil(cierre, config.SMA_RAPIDA).iloc[-1]
-    lenta = media_movil(cierre, config.SMA_LENTA).iloc[-1]
-    valor_rsi = rsi(cierre).iloc[-1]
+    nombres = {1: "verde", -1: "roja", 0: "sin cambio"}
+    color = colores(velas.iloc[-seguidas:])
+    posicion = int(posicion_tres_velas(velas, seguidas).iloc[-1])
+    if (color < 0).all():
+        motivo = f"Las últimas {seguidas} velas son rojas: el precio viene bajando y compra esperando un rebote"
+    elif (color > 0).all():
+        motivo = f"Las últimas {seguidas} velas son verdes: el precio viene subiendo y vende"
+    else:
+        estado = "comprado" if posicion == 1 else "fuera del mercado"
+        motivo = (f"Últimas {seguidas} velas: {', '.join(nombres[int(c)] for c in color)}. No son {seguidas} del mismo "
+                  f"color, así que mantiene lo que venía haciendo ({estado})")
     filas = [
         {"estrategia": NOMBRE_BH, "posicion": 1, "motivo": "Siempre comprado"},
-        {"estrategia": NOMBRE_CRUCE, "posicion": int(rapida > lenta),
-         "motivo": f"Media de {config.SMA_RAPIDA} h = {rapida:.2f} {'>' if rapida > lenta else '≤'} "
-                   f"media de {config.SMA_LENTA} h = {lenta:.2f}"},
-        {"estrategia": NOMBRE_RSI, "posicion": int(posicion_rsi(cierre).iloc[-1]),
-         "motivo": f"RSI = {valor_rsi:.0f} (compra bajo {config.RSI_COMPRA}, vende sobre {config.RSI_VENTA}; "
-                   "entre medio mantiene lo que venía haciendo)"},
+        {"estrategia": NOMBRE_VELAS, "posicion": posicion, "motivo": motivo},
     ]
-    if tabla_siguiente is not None and not tabla_siguiente.empty:
-        retornos = np.log1p(tabla_siguiente["retorno_pct"].to_numpy(dtype=float) / 100)
-        for (_, fila), retorno in zip(tabla_siguiente.iterrows(), retornos):
-            filas.append({"estrategia": f"Señal de {fila['modelo']}", "posicion": int(retorno > umbral),
-                          "motivo": f"Predice {fila['retorno_pct']:+.3f}% para la próxima hora"})
-        if len(retornos) >= 2:
-            votos = int((retornos > umbral).sum())
-            filas.append({"estrategia": NOMBRE_CONSENSO, "posicion": int(votos > len(retornos) / 2),
-                          "motivo": f"{votos} de {len(retornos)} modelos "
-                                    f"{'predice' if votos == 1 else 'predicen'} una subida mayor que el umbral"})
+    if probabilidad_cnn is not None:
+        filas.append({"estrategia": NOMBRE_CNN, "posicion": int(probabilidad_cnn > config.CNN_UMBRAL),
+                      "motivo": f"La CNN da {100 * probabilidad_cnn:.0f}% de probabilidad de que la próxima hora suba "
+                                f"(compra si supera {100 * config.CNN_UMBRAL:.0f}%)"})
     return pd.DataFrame(filas)

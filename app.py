@@ -20,6 +20,7 @@ import portafolio as portafolio_simulado
 import prediccion
 import preparacion
 import varias_horas
+import velas_cnn
 
 st.set_page_config(page_title="Predicción de acciones", layout="wide")
 
@@ -29,7 +30,8 @@ COLOR_REAL = "#2a78d6"
 COLOR_REFERENCIA = "#898781"
 COLOR_SUBE = "#0ca30c"
 COLOR_BAJA = "#d03b3b"
-COLORES_MODELO = {"Prophet": "#eb6834", "AR": "#1baf7a", "RNN simple": "#e87ba4", "LSTM": "#9085e9"}
+COLORES_MODELO = {"Prophet": "#eb6834", "AR": "#1baf7a", "RNN simple": "#e87ba4", "LSTM": "#9085e9",
+                  "CNN de velas": "#eda100"}
 COLORES_PLIEGUE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 SALTOS_HORARIO = [dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")]
 
@@ -104,10 +106,16 @@ def prediccion_siguiente(ticker, intervalo, ultima_iso, ajuste, version, _arts):
 
 
 @st.cache_data(show_spinner="Simulando las estrategias…", max_entries=24)
-def backtest_estrategias(ticker, intervalo, ultima_iso, costo_pct, umbral_pct, version, _arts):
+def backtest_estrategias(ticker, intervalo, ultima_iso, costo_pct, version, _arts):
     completas = completas_hasta(ticker, intervalo, ultima_iso)
     predicciones = pd.read_csv(_arts["carpeta"] / "predicciones_prueba.csv") if _arts else None
-    return estrategias.backtest(completas["Close"], predicciones, costo_pct, umbral_pct)
+    return estrategias.backtest(completas, predicciones, costo_pct)
+
+
+@st.cache_data(show_spinner="La CNN está mirando las últimas velas…", max_entries=12)
+def cnn_actual(ticker, intervalo, ultima_iso, version, _arts):
+    """(probabilidad de que suba la próxima vela, imagen que mira la CNN) o (None, None)."""
+    return prediccion.cnn_siguiente(completas_hasta(ticker, intervalo, ultima_iso), _arts)
 
 
 @st.cache_data(show_spinner="Pronosticando varias horas…", max_entries=24)
@@ -497,15 +505,12 @@ with tab_horas:
 
 COLORES_ESTRATEGIA = {
     estrategias.NOMBRE_BH: COLOR_REFERENCIA,
-    estrategias.NOMBRE_CRUCE: "#eda100",
-    estrategias.NOMBRE_RSI: "#008300",
-    estrategias.NOMBRE_CONSENSO: "#e34948",
+    estrategias.NOMBRE_VELAS: "#e34948",
+    estrategias.NOMBRE_CNN: "#eda100",
 }
 
 
 def color_estrategia(nombre):
-    if nombre.startswith("Señal de "):
-        return color_modelo(nombre.removeprefix("Señal de "))
     return COLORES_ESTRATEGIA.get(nombre, COLOR_REFERENCIA)
 
 
@@ -522,29 +527,24 @@ with tab_estrategias:
         st.markdown(
             f"- **{estrategias.NOMBRE_BH}:** compra al inicio y no vende. Es la referencia que las demás deberían "
             "superar.\n"
-            f"- **{estrategias.NOMBRE_CRUCE}:** comprada mientras el promedio de las últimas {config.SMA_RAPIDA} horas "
-            f"está por encima del de las últimas {config.SMA_LENTA} (tendencia al alza); fuera cuando está por debajo.\n"
-            f"- **{estrategias.NOMBRE_RSI}:** el RSI compara las subidas con las bajadas de las últimas "
-            f"{config.RSI_PERIODO} horas, en una escala de 0 a 100. Compra cuando baja de {config.RSI_COMPRA} "
-            f"(sobrevendida) y vende cuando supera {config.RSI_VENTA} (sobrecomprada).\n"
-            "- **Señal de cada modelo:** comprada cuando el modelo predice para la próxima hora un retorno mayor "
-            "que el umbral.\n"
-            f"- **{estrategias.NOMBRE_CONSENSO}:** comprada cuando más de la mitad de los modelos predice una subida "
-            "mayor que el umbral."
+            f"- **{estrategias.NOMBRE_VELAS}:** mira el color de las últimas {config.VELAS_SEGUIDAS} velas de 1 hora. "
+            f"Si las {config.VELAS_SEGUIDAS} son rojas (cada una cerró por debajo de su apertura), el precio viene "
+            f"bajando y compra esperando un rebote. Si las {config.VELAS_SEGUIDAS} son verdes, vende. En cualquier "
+            "otro caso mantiene lo que venía haciendo.\n"
+            f"- **{estrategias.NOMBRE_CNN}:** una red convolucional mira una imagen de las últimas velas, como la de "
+            "abajo, y da la probabilidad de que la hora siguiente suba. Queda comprada cuando esa probabilidad supera "
+            f"el {100 * config.CNN_UMBRAL:.0f}%."
         )
-    ajuste_1, ajuste_2 = st.columns(2)
-    costo_pct = ajuste_1.slider("Costo por cada compra o venta (%)", min_value=0.0, max_value=0.3,
-                                value=config.COSTO_OPERACION_PCT, step=0.01,
-                                help="Comisión más la diferencia entre precio de compra y de venta (spread).")
-    umbral_pct = ajuste_2.slider("Umbral de los modelos (%)", min_value=0.0, max_value=0.2, value=0.0, step=0.01,
-                                 help="Retorno predicho mínimo para comprar. Con 0 basta con que el modelo prediga "
-                                      "subida; un umbral cercano al costo evita operar por ganancias que no lo cubren.")
+    costo_pct = st.slider("Costo por cada compra o venta (%)", min_value=0.0, max_value=0.3,
+                          value=config.COSTO_OPERACION_PCT, step=0.01,
+                          help="Comisión más la diferencia entre precio de compra y de venta (spread).")
 
     version_est = arts["resumen"]["entrenado_en"] if arts else None
-    tabla_sig, info_sig = prediccion_siguiente(ticker, INTERVALO, ultima_iso, ajuste_prophet(arts), version_est, arts)
     completas_est = completas_hasta(ticker, INTERVALO, ultima_iso)
-    senales = estrategias.senales_actuales(completas_est["Close"], tabla_sig, umbral_pct)
-    st.markdown(f"**Posición de cada estrategia para la vela de {hora_doble(info_sig['objetivo'])}**")
+    probabilidad_cnn, foto_cnn = cnn_actual(ticker, INTERVALO, ultima_iso, version_est, arts)
+    senales = estrategias.senales_actuales(completas_est, probabilidad_cnn)
+    siguiente = datos.siguiente_vela(completas_est.index[-1], INTERVALO)
+    st.markdown(f"**Posición de cada estrategia para la vela de {hora_doble(siguiente)}**")
     st.dataframe(pd.DataFrame({
         "estrategia": senales["estrategia"],
         "posición": [posicion_texto(p) for p in senales["posicion"]],
@@ -552,12 +552,22 @@ with tab_estrategias:
     }), hide_index=True)
     st.caption("▲ Comprado = comprar o mantener la compra. ▼ Fuera del mercado = vender o seguir sin comprar.")
 
-    curvas, tabla_est = backtest_estrategias(ticker, INTERVALO, ultima_iso, costo_pct, umbral_pct, version_est, arts)
-    nombres_est = list(tabla_est["estrategia"])
-    preseleccion = [n for n in nombres_est if not n.startswith("Señal de ")]
-    elegidas = st.multiselect("Estrategias en el gráfico", nombres_est, default=preseleccion)
+    if foto_cnn is not None:
+        velas_foto = arts["resumen"]["cnn"]["velas"]
+        st.markdown(f"**Lo que mira la CNN ahora:** las últimas {velas_foto} velas de 1 hora, hasta la de "
+                    f"{hora_doble(completas_est.index[-1])}")
+        st.image(velas_cnn.ampliar(foto_cnn, factor=6),
+                 caption=f"Probabilidad de que la próxima hora suba: {100 * probabilidad_cnn:.0f}%")
+        st.caption("Cada vela ocupa unos pocos píxeles: verde si cerró por encima de su apertura y roja si cerró por "
+                   "debajo; el cuerpo va de la apertura al cierre y la línea delgada del mínimo al máximo. La altura de "
+                   "la imagen va del mínimo al máximo de esas velas, así que la red ve la forma del movimiento y no el "
+                   "nivel del precio.")
+    elif arts:
+        st.info("La CNN de velas todavía no está entrenada. Se entrena con `python entrenar.py`.")
+
+    curvas, tabla_est = backtest_estrategias(ticker, INTERVALO, ultima_iso, costo_pct, version_est, arts)
     fig = go.Figure()
-    for nombre in elegidas:
+    for nombre in curvas.columns:
         es_referencia = nombre == estrategias.NOMBRE_BH
         fig.add_trace(go.Scatter(x=a_hora_ny(curvas.index), y=100 * curvas[nombre], mode="lines", name=nombre,
                                  line=dict(color=color_estrategia(nombre), width=2,
@@ -582,9 +592,9 @@ with tab_estrategias:
     st.dataframe(vista_est, hide_index=True)
     st.caption(
         "Máxima caída: la peor pérdida desde un máximo previo del capital. Sharpe: retorno promedio por unidad de "
-        "riesgo, llevado a un año; por encima de 1 se considera bueno. Las señales de los modelos usan sus "
-        "predicciones del periodo de prueba, hechas con datos que no vieron al entrenar. Que una estrategia haya "
-        "funcionado en este periodo no garantiza que funcione después."
+        "riesgo, llevado a un año; por encima de 1 se considera bueno. La CNN usa sus predicciones del periodo de "
+        "prueba, hechas con imágenes que no vio al entrenar. Que una estrategia haya funcionado en este periodo no "
+        "garantiza que funcione después."
     )
 
 
@@ -609,13 +619,13 @@ def contexto_agente():
     futuro_ag, info_futuro_ag = pronostico_varias_horas(ticker, INTERVALO, ultima_iso, datos.velas_por_dia(INTERVALO),
                                                         ajuste_prophet(arts), version_ag, arts)
     completas_ag = completas_hasta(ticker, INTERVALO, ultima_iso)
-    _, tabla_est_ag = backtest_estrategias(ticker, INTERVALO, ultima_iso, config.COSTO_OPERACION_PCT, 0.0,
-                                           version_ag, arts)
+    _, tabla_est_ag = backtest_estrategias(ticker, INTERVALO, ultima_iso, config.COSTO_OPERACION_PCT, version_ag, arts)
+    probabilidad_ag, _ = cnn_actual(ticker, INTERVALO, ultima_iso, version_ag, arts)
     return agente.construir_contexto(
         ticker, completas_ag, tabla_ag, info_ag,
         metricas_modelos=pd.read_csv(arts["carpeta"] / "metricas.csv") if arts else None,
         futuro=futuro_ag, info_futuro=info_futuro_ag,
-        senales=estrategias.senales_actuales(completas_ag["Close"], tabla_ag),
+        senales=estrategias.senales_actuales(completas_ag, probabilidad_ag),
         resultados_estrategias=tabla_est_ag, costo_pct=config.COSTO_OPERACION_PCT,
     )
 
@@ -762,10 +772,13 @@ with tab_eval:
                         key="eval_acierto")
         st.caption("Un modelo solo aporta si su acierto supera a las líneas base (gris) por más que el margen de error. "
                    "Si las barras de error se cruzan con el 50% o con 'Siempre sube', no hay evidencia de que prediga "
-                   "mejor que el azar.")
+                   "mejor que el azar. AR, Prophet, RNN y LSTM predicen el log-retorno (regresión) y aciertan cuando "
+                   "su signo coincide con el del retorno real; la CNN de velas clasifica directamente (acierta cuando "
+                   "da más de 50% y la hora sube, o menos de 50% y baja), por eso no tiene error del precio.")
 
         predicciones = pd.read_csv(carpeta / "predicciones_prueba.csv")
-        columnas_modelo = [c for c in predicciones.columns if c.startswith("AR(") or c in COLORES_MODELO]
+        columnas_modelo = [c for c in predicciones.columns
+                           if c.startswith("AR(") or (c in COLORES_MODELO and c != velas_cnn.NOMBRE)]
         elegido = st.selectbox("Comparar precio real y predicho", columnas_modelo)
         tramo = predicciones.tail(150)
         x = a_hora_ny(pd.to_datetime(tramo["marca_objetivo"], utc=True))
@@ -779,13 +792,8 @@ with tab_eval:
                    "último precio: por eso se evalúa la dirección y no solo qué tan parecidas se ven las curvas.")
 
         st.markdown("**Curvas de aprendizaje de las redes**")
-        c1, c2 = st.columns(2)
-        for columna, tipo in ((c1, "rnn"), (c2, "lstm")):
-            ruta = carpeta / f"historial_{tipo}.csv"
-            if not ruta.exists():
-                continue
-            historial = pd.read_csv(ruta)
-            mejor = resumen["redes"][tipo]
+
+        def curva_aprendizaje(historial, titulo, eje_y, clave, columna):
             fig_h = go.Figure()
             if "pliegue" in historial:
                 historial["pliegue"] = historial["pliegue"].astype(str)
@@ -804,18 +812,35 @@ with tab_eval:
                 fig_h.add_trace(go.Scatter(x=historial["epoca"] + 1, y=historial["val_loss"], name="Validación",
                                            line=dict(color=COLORES_MODELO["Prophet"], width=2)))
             fig_h.update_xaxes(title="Época")
-            fig_h.update_yaxes(title="MSE (retorno estandarizado)")
-            titulo = (f"{'RNN simple' if tipo == 'rnn' else 'LSTM'}: ventana {mejor['ventana']}, "
-                      f"{mejor['unidades']} unidades, {mejor['capas']} capa(s), "
-                      f"{mejor.get('optimizador', 'Adam')} con tasa {mejor['tasa']}")
-            columna.plotly_chart(estilo(fig_h, alto=340, titulo=titulo, saltos=False), key=f"eval_curva_{tipo}")
+            fig_h.update_yaxes(title=eje_y)
+            columna.plotly_chart(estilo(fig_h, alto=340, titulo=titulo, saltos=False), key=clave)
+
+        c1, c2 = st.columns(2)
+        for columna, tipo in ((c1, "rnn"), (c2, "lstm")):
+            ruta = carpeta / f"historial_{tipo}.csv"
+            if ruta.exists():
+                mejor = resumen["redes"][tipo]
+                titulo = (f"{'RNN simple' if tipo == 'rnn' else 'LSTM'}: ventana {mejor['ventana']}, "
+                          f"{mejor['unidades']} unidades, {mejor['capas']} capa(s), "
+                          f"{mejor.get('optimizador', 'Adam')} con tasa {mejor['tasa']}")
+                curva_aprendizaje(pd.read_csv(ruta), titulo, "MSE (retorno estandarizado)", f"eval_curva_{tipo}",
+                                  columna)
+        if (carpeta / "historial_cnn.csv").exists() and "cnn" in resumen:
+            mejor = resumen["cnn"]
+            titulo = (f"{velas_cnn.NOMBRE}: {mejor['velas']} velas, {mejor['filtros']} filtros, "
+                      f"{mejor.get('optimizador', 'SGD')} con tasa {mejor['tasa']}")
+            curva_aprendizaje(pd.read_csv(carpeta / "historial_cnn.csv"), titulo, "Entropía cruzada binaria",
+                              "eval_curva_cnn", st)
         if "validacion_cruzada" in resumen:
             st.caption("Cada línea continua es el error de validación de la mejor combinación en un pliegue: el "
                        "entrenamiento se detiene cuando deja de bajar. La línea punteada es el modelo final, "
-                       "reentrenado con todo el tramo de desarrollo durante el promedio de épocas de los pliegues.")
+                       "reentrenado con todo el tramo de desarrollo durante el promedio de épocas de los pliegues. "
+                       "La RNN y la LSTM hacen regresión del log-retorno (error cuadrático medio); la CNN clasifica "
+                       "si la hora siguiente sube o baja (entropía cruzada).")
 
         for archivo, titulo in (("busqueda_rnn.csv", "Búsqueda de hiperparámetros: RNN simple"),
                                 ("busqueda_lstm.csv", "Búsqueda de hiperparámetros: LSTM"),
+                                ("busqueda_cnn.csv", f"Búsqueda de hiperparámetros: {velas_cnn.NOMBRE}"),
                                 ("busqueda_ar.csv", "Selección de p para AR(p)"),
                                 ("busqueda_prophet.csv", "Búsqueda de hiperparámetros: Prophet")):
             if (carpeta / archivo).exists():
