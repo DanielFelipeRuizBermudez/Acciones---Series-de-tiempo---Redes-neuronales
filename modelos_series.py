@@ -1,7 +1,12 @@
-"""Modelos de series de tiempo: AR(p) sobre log-retornos y Prophet sobre el log del precio."""
+"""Modelos de series de tiempo: AR(p) y ARIMA(p, d, q) sobre el log del precio, y Prophet.
+
+El log-retorno es la primera diferencia del log del precio: r_t = ln P_t - ln P_(t-1). Por eso un ARMA(p, q)
+ajustado sobre el log-retorno es un ARIMA(p, 1, q) sobre ln(precio), y el AR(p) es un ARIMA(p, 1, 0).
+"""
 
 import itertools
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -72,6 +77,141 @@ def predecir_ar_desde_dict(parametros, ultimos_retornos):
     p = parametros["p"]
     rezagos = np.asarray(ultimos_retornos, dtype=float)[-p:][::-1]
     return float(parametros["intercepto"] + np.dot(parametros["coeficientes"], rezagos))
+
+
+# ---------------------------------------------------------------- Box-Jenkins: integración y ARIMA
+
+ESCALA_ARIMA = 100.0
+NOMBRES_DIFERENCIA = {0: "ln(precio)", 1: "Δ ln(precio) = log-retorno", 2: "Δ² ln(precio)"}
+
+
+def prueba_adf(serie):
+    """Dickey-Fuller aumentada con constante; H0: la serie tiene raíz unitaria (no es estacionaria)."""
+    from statsmodels.tsa.stattools import adfuller
+
+    estadistico, p_valor, rezagos, n, criticos, _ = adfuller(np.asarray(serie, dtype=float), autolag="AIC")
+    return {"estadistico": float(estadistico), "p_valor": float(p_valor), "rezagos": int(rezagos), "n": int(n),
+            "critico_5": float(criticos["5%"])}
+
+
+def orden_integracion(log_precio, alfa=config.ALFA_ADF, d_max=2):
+    """Diferencia ln(precio) hasta que la prueba ADF rechace la raíz unitaria.
+
+    Devuelve (d, pasos): d es el número de diferencias necesarias y cada paso trae la prueba de una serie.
+    """
+    serie = np.asarray(log_precio, dtype=float)
+    pasos = []
+    for d in range(d_max + 1):
+        resultado = prueba_adf(serie)
+        estacionaria = resultado["p_valor"] < alfa
+        pasos.append({"d": d, "serie": NOMBRES_DIFERENCIA[d], **resultado, "estacionaria": bool(estacionaria)})
+        if estacionaria:
+            return d, pasos
+        serie = np.diff(serie)
+    return d_max, pasos
+
+
+def ajustar_arma(w, p, q):
+    """ARMA(p, q) con media, por máxima verosimilitud, restringido a la región estacionaria e invertible."""
+    from statsmodels.tsa.arima.model import ARIMA
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ARIMA(np.asarray(w, dtype=float), order=(p, 0, q), trend="c").fit()
+
+
+def diagnostico_residuos(residuos, p, q, rezagos=config.LJUNG_BOX_REZAGOS):
+    """Ljung-Box (H0: residuos sin autocorrelación) y Jarque-Bera (H0: residuos normales)."""
+    from statsmodels.stats.diagnostic import acorr_ljungbox
+    from statsmodels.stats.stattools import jarque_bera
+
+    e = np.asarray(residuos, dtype=float)
+    ljung_box = acorr_ljungbox(e, lags=list(rezagos), model_df=p + q)
+    jb, jb_p, asimetria, curtosis = jarque_bera(e)
+    return {
+        "ljung_box": [{"rezagos": int(k), "estadistico": float(fila["lb_stat"]), "p_valor": float(fila["lb_pvalue"])}
+                      for k, fila in ljung_box.iterrows()],
+        "jarque_bera": {"estadistico": float(jb), "p_valor": float(jb_p), "asimetria": float(asimetria),
+                        "curtosis": float(curtosis)},
+    }
+
+
+def _raices(valores):
+    return [[float(np.real(z)), float(np.imag(z))] for z in np.atleast_1d(valores)]
+
+
+def arima_a_dict(ajuste, p, q, d=1):
+    valores = dict(zip(ajuste.model.param_names, np.asarray(ajuste.params, dtype=float)))
+    return {
+        "p": p, "d": d, "q": q, "nombre": f"ARIMA({p},{d},{q})", "escala": ESCALA_ARIMA,
+        "constante": float(valores.get("const", 0.0)),
+        "ar": [float(valores[f"ar.L{i}"]) for i in range(1, p + 1)],
+        "ma": [float(valores[f"ma.L{j}"]) for j in range(1, q + 1)],
+        "sigma2": float(valores["sigma2"]),
+        "aic": float(ajuste.aic), "bic": float(ajuste.bic),
+        "raices_ar": _raices(ajuste.arroots),
+        "raices_ma": _raices(ajuste.maroots),
+        "diagnostico": diagnostico_residuos(ajuste.resid, p, q),
+    }
+
+
+def buscar_arima(f, cortes, p_max=config.ARIMA_MAX_P, q_max=config.ARIMA_MAX_Q, al_terminar=None):
+    """Ajusta ARMA(p, q) sobre el log-retorno (en %) del tramo de desarrollo y elige el de menor AIC.
+
+    Solo compiten los ajustes que convergieron y quedaron estacionarios e invertibles.
+    Devuelve (parámetros del elegido, tabla de la búsqueda, residuos del elegido).
+    """
+    w = ESCALA_ARIMA * f["log_ret"].to_numpy(dtype=float)[: cortes.fin_validacion + 1]
+    combinaciones = [(p, q) for p in range(p_max + 1) for q in range(q_max + 1)]
+    filas, ajustes = [], {}
+    for numero, (p, q) in enumerate(combinaciones, start=1):
+        ajuste = ajustar_arma(w, p, q)
+        retornos_mle = ajuste.mle_retvals if isinstance(ajuste.mle_retvals, dict) else {}
+        estacionario = bool(np.all(np.abs(np.atleast_1d(ajuste.arroots)) > 1))
+        invertible = bool(np.all(np.abs(np.atleast_1d(ajuste.maroots)) > 1))
+        convergio = bool(retornos_mle.get("converged", True))
+        fila = {"p": p, "q": q, "aic": float(ajuste.aic), "bic": float(ajuste.bic),
+                "log_verosimilitud": float(ajuste.llf), "estacionario": estacionario, "invertible": invertible,
+                "convergio": convergio, "valido": estacionario and invertible and convergio}
+        filas.append(fila)
+        ajustes[(p, q)] = ajuste
+        if al_terminar:
+            al_terminar(numero, len(combinaciones), fila)
+    tabla = pd.DataFrame(filas)
+    candidatas = tabla[tabla["valido"]] if tabla["valido"].any() else tabla
+    elegida = candidatas.loc[candidatas["aic"].idxmin()]
+    p, q = int(elegida["p"]), int(elegida["q"])
+    ajuste = ajustes[(p, q)]
+    tabla = tabla.sort_values("aic").reset_index(drop=True)
+    return arima_a_dict(ajuste, p, q), tabla, np.asarray(ajuste.resid, dtype=float)
+
+
+def predecir_arima(parametros, retornos, posiciones, horizonte=1):
+    """Log-retornos pronosticados por el ARIMA, con sus parámetros fijos (orígenes × horizonte).
+
+    Cada origen j usa solo los retornos hasta j: los residuos pasados salen del filtro del ARMA y los futuros
+    valen 0. Así el pronóstico a varias horas tiende a la media del log-retorno.
+    """
+    from scipy.signal import lfilter
+
+    escala = parametros.get("escala", ESCALA_ARIMA)
+    media = parametros["constante"]
+    phi = np.asarray(parametros["ar"], dtype=float)
+    theta = np.asarray(parametros["ma"], dtype=float)
+    u = escala * np.asarray(retornos, dtype=float) - media
+    e = lfilter(np.r_[1.0, -phi], np.r_[1.0, theta], u)
+    p, q = len(phi), len(theta)
+    salida = np.zeros((len(posiciones), horizonte))
+    for fila, j in enumerate(posiciones):
+        u_previos = list(u[max(0, j - p + 1): j + 1]) if p else []
+        e_previos = list(e[max(0, j - q + 1): j + 1]) if q else []
+        for h in range(horizonte):
+            siguiente = sum(phi[i] * u_previos[-1 - i] for i in range(min(p, len(u_previos))))
+            siguiente += sum(theta[k] * e_previos[-1 - k] for k in range(min(q, len(e_previos))))
+            salida[fila, h] = siguiente
+            u_previos.append(siguiente)
+            e_previos.append(0.0)
+    return (salida + media) / escala
 
 
 # ---------------------------------------------------------------- Prophet

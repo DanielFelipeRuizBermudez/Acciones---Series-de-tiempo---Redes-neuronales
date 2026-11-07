@@ -33,6 +33,14 @@ PLIEGUES_CV_RAPIDO = 2
 
 AR_MAX_P = 10
 
+ALFA_ADF = 0.05
+REZAGOS_ACF = 35
+ARIMA_MAX_P = 3
+ARIMA_MAX_Q = 3
+ARIMA_MAX_P_RAPIDO = 1
+ARIMA_MAX_Q_RAPIDO = 1
+LJUNG_BOX_REZAGOS = [7, 14]
+
 PROPHET_REJILLA = {
     "changepoint_prior_scale": [0.01, 0.05, 0.3],
     "seasonality_prior_scale": [0.1, 1.0, 10.0],

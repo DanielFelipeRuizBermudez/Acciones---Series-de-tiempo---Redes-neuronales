@@ -65,6 +65,10 @@ def predecir_siguiente(df_completas, intervalo, artefactos=None, modelo_prophet=
         resumen = artefactos["resumen"]
         retorno_ar = modelos_series.predecir_ar_desde_dict(resumen["ar"], f["log_ret"].to_numpy())
         filas.append(_fila(f"AR({resumen['ar']['p']})", cierre, retorno_ar))
+        if "arima" in resumen:
+            retornos = f["log_ret"].to_numpy(dtype=float)
+            retorno_arima = float(modelos_series.predecir_arima(resumen["arima"], retornos, [len(retornos) - 1])[0, 0])
+            filas.append(_fila(resumen["arima"]["nombre"], cierre, retorno_arima))
 
     if modelo_prophet is not None:
         pronostico = modelos_series.pronosticar_prophet(modelo_prophet, [objetivo])

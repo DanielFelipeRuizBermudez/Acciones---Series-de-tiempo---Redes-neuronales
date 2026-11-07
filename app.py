@@ -30,14 +30,26 @@ COLOR_REAL = "#2a78d6"
 COLOR_REFERENCIA = "#898781"
 COLOR_SUBE = "#0ca30c"
 COLOR_BAJA = "#d03b3b"
-COLORES_MODELO = {"Prophet": "#eb6834", "AR": "#1baf7a", "RNN simple": "#e87ba4", "LSTM": "#9085e9",
-                  "CNN de velas": "#eda100"}
+COLORES_MODELO = {"Prophet": "#eb6834", "AR": "#1baf7a", "ARIMA": "#8c564b", "RNN simple": "#e87ba4",
+                  "LSTM": "#9085e9", "CNN de velas": "#eda100"}
 COLORES_PLIEGUE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 SALTOS_HORARIO = [dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")]
 
 
+def familia_modelo(nombre):
+    if nombre.startswith("ARIMA("):
+        return "ARIMA"
+    if nombre.startswith("AR("):
+        return "AR"
+    return nombre
+
+
+def es_modelo(nombre):
+    return familia_modelo(nombre) in COLORES_MODELO
+
+
 def color_modelo(nombre):
-    return COLORES_MODELO.get("AR" if nombre.startswith("AR(") else nombre, COLOR_REFERENCIA)
+    return COLORES_MODELO.get(familia_modelo(nombre), COLOR_REFERENCIA)
 
 
 def a_hora_ny(marcas):
@@ -154,21 +166,33 @@ def pronostico_prophet(ticker, intervalo, ultima_iso, ajuste, sesiones=30, velas
 
 
 @st.cache_data(show_spinner="Calculando pruebas de estacionariedad…", max_entries=6)
-def analisis_serie(ticker, intervalo, ultima_iso, rezagos=20):
-    from statsmodels.tsa.stattools import acf, adfuller, pacf
+def analisis_serie(ticker, intervalo, ultima_iso, rezagos=config.REZAGOS_ACF):
+    from statsmodels.tsa.stattools import acf, pacf
 
-    precio = completas_hasta(ticker, intervalo, ultima_iso)["Close"]
-    retorno = np.log(precio).diff().dropna()
-    filas = []
-    for nombre, serie in (("Precio de cierre", precio), ("Log-retorno", retorno)):
-        estadistico, p_valor, *_ = adfuller(serie.to_numpy(), autolag="AIC")
-        filas.append({
-            "serie": nombre,
-            "estadístico ADF": round(float(estadistico), 3),
-            "p-valor": round(float(p_valor), 4),
-            "conclusión": "Estacionaria" if p_valor < 0.05 else "No estacionaria",
-        })
-    return pd.DataFrame(filas), acf(retorno, nlags=rezagos)[1:], pacf(retorno, nlags=rezagos)[1:], len(retorno)
+    log_precio = np.log(completas_hasta(ticker, intervalo, ultima_iso)["Close"].astype(float))
+    retorno = log_precio.diff().dropna()
+    d, pasos = modelos_series.orden_integracion(log_precio.to_numpy())
+    return {
+        "d": d,
+        "pasos": pasos,
+        "acf_log": acf(log_precio, nlags=rezagos)[1:],
+        "pacf_log": pacf(log_precio, nlags=rezagos)[1:],
+        "acf_ret": acf(retorno, nlags=rezagos)[1:],
+        "pacf_ret": pacf(retorno, nlags=rezagos)[1:],
+        "n": len(retorno),
+    }
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def residuos_arima(ruta, version, rezagos=config.REZAGOS_ACF):
+    """Cuantiles teóricos y observados de los residuos estandarizados, y su ACF."""
+    from scipy import stats
+    from statsmodels.tsa.stattools import acf
+
+    residuos = pd.read_csv(ruta)["residuo_pct"].to_numpy(dtype=float)
+    estandarizados = np.sort((residuos - residuos.mean()) / residuos.std())
+    teoricos = stats.norm.ppf((np.arange(1, len(estandarizados) + 1) - 0.5) / len(estandarizados))
+    return teoricos, estandarizados, acf(residuos, nlags=rezagos)[1:], len(residuos)
 
 
 @st.cache_data(show_spinner="Revisando cómo les fue a los modelos en la última sesión…", max_entries=6)
@@ -349,7 +373,7 @@ def panel_vivo(ticker, arts):
         revision = evaluacion_ultima_sesion(ticker, INTERVALO, completas.index[-1].isoformat(), ajuste_prophet(arts),
                                             version, arts)
         if not revision.empty:
-            columnas_modelos = [c for c in revision.columns if c.startswith("AR(") or c in COLORES_MODELO]
+            columnas_modelos = [c for c in revision.columns if es_modelo(c)]
             dia_revision = revision["vela"].iloc[0].tz_convert(config.ZONA_MERCADO)
             st.markdown(f"**¿Cómo les fue a los modelos en la sesión del {DIAS[dia_revision.weekday()]} "
                         f"{dia_revision:%d/%m}?**")
@@ -407,7 +431,7 @@ def hora_corta(marca):
 with tab_horas:
     st.markdown(
         "Pronóstico de varias horas de mercado hacia adelante con el modelo ganador de cada tipo. "
-        "AR, RNN y LSTM predicen una hora, toman esa predicción como si fuera un dato real y siguen con la "
+        "AR, ARIMA, RNN y LSTM predicen una hora, toman esa predicción como si fuera un dato real y siguen con la "
         "siguiente (**pronóstico recursivo**); Prophet evalúa su curva directamente en cada hora futura."
     )
     control_1, control_2 = st.columns([1, 2])
@@ -695,35 +719,205 @@ y los patrones por hora, pero no reacciona a lo que pasó en la última vela; po
 
 # ------------------------------------------------------------------ pestaña 3: análisis de la serie
 
+VELAS_SESION = datos.velas_por_dia(INTERVALO)
+
+
+def grafico_correlacion(valores, n, titulo, clave, columna):
+    """Barras de una ACF o PACF con la franja del 95%; los rezagos múltiplos de una sesión van en otro color."""
+    rezagos = np.arange(1, len(valores) + 1)
+    colores = [COLORES_MODELO["Prophet"] if k % VELAS_SESION == 0 else COLOR_REAL for k in rezagos]
+    fig_c = go.Figure(go.Bar(x=rezagos, y=valores, marker_color=colores))
+    banda = 1.96 / np.sqrt(n)
+    for signo in (1, -1):
+        fig_c.add_hline(y=signo * banda, line_dash="dash", line_color=COLOR_REFERENCIA)
+    fig_c.update_xaxes(title="Rezago (horas)")
+    fig_c.update_layout(showlegend=False)
+    columna.plotly_chart(estilo(fig_c, alto=300, titulo=titulo, saltos=False, hover="closest"), key=clave)
+
+
+def texto_p_valor(p_valor):
+    return "< 0.0001" if p_valor < 1e-4 else f"{p_valor:.4f}"
+
+
+def _con_signo(valor):
+    return f"- {abs(valor):.4f}" if valor < 0 else f"+ {valor:.4f}"
+
+
+def ecuacion_arima(arima):
+    """El ARMA elegido, escrito sobre el log-retorno en %."""
+    media = arima["constante"]
+    texto = rf"r_t = {media:.4f}"
+    for i, phi in enumerate(arima["ar"], start=1):
+        texto += rf" {_con_signo(phi)}\,(r_{{t-{i}}} {_con_signo(-media)})"
+    texto += r" + \varepsilon_t"
+    for j, theta in enumerate(arima["ma"], start=1):
+        texto += rf" {_con_signo(theta)}\,\varepsilon_{{t-{j}}}"
+    return texto
+
+
 with tab_serie:
+    st.markdown("Metodología de **Box-Jenkins**: (1) mirar la serie original, (2) diferenciarla hasta que sea "
+                "estacionaria según la prueba de Dickey-Fuller aumentada, (3) ajustar ARMA(p, q) a la serie "
+                "estacionaria y elegir p y q por AIC, y (4) revisar que los residuos se comporten como ruido blanco.")
     completas = completas_hasta(ticker, INTERVALO, ultima_iso)
-    retorno = 100 * np.log(completas["Close"]).diff()
+    x_serie = a_hora_ny(completas.index)
+    analisis = analisis_serie(ticker, INTERVALO, ultima_iso)
+
+    st.subheader("1. Serie original")
+    st.caption(f"Toda la historia guardada: {len(completas):,} velas de 1 hora, desde {hora_doble(completas.index[0])} "
+               f"hasta {hora_doble(completas.index[-1])}.")
     c1, c2 = st.columns(2)
-    fig_p = go.Figure(go.Scatter(x=a_hora_ny(completas.index), y=completas["Close"], mode="lines", name="Cierre",
+    fig_p = go.Figure(go.Scatter(x=x_serie, y=completas["Close"], mode="lines", name="Cierre",
                                  line=dict(color=COLOR_REAL, width=1.5)))
-    c1.plotly_chart(estilo(fig_p, alto=320, titulo="Precio de cierre por hora (no estacionario)"), key="serie_precio")
-    fig_r = go.Figure(go.Scatter(x=a_hora_ny(completas.index), y=retorno, mode="lines", name="Log-retorno",
+    c1.plotly_chart(estilo(fig_p, alto=320, titulo="Precio de cierre por hora"), key="serie_precio")
+    fig_l = go.Figure(go.Scatter(x=x_serie, y=np.log(completas["Close"].astype(float)), mode="lines", name="ln(precio)",
+                                 line=dict(color=COLOR_REAL, width=1.5)))
+    c2.plotly_chart(estilo(fig_l, alto=320, titulo="ln(precio): la serie original del ARIMA"), key="serie_log")
+    c3, c4 = st.columns(2)
+    grafico_correlacion(analisis["acf_log"], analisis["n"], "ACF de ln(precio)", "serie_acf_log", c3)
+    grafico_correlacion(analisis["pacf_log"], analisis["n"], "PACF de ln(precio)", "serie_pacf_log", c4)
+    st.caption("La ACF de ln(precio) empieza cerca de 1 y baja muy despacio, y la PACF solo tiene el primer rezago: es "
+               "la huella de una raíz unitaria, una serie que no vuelve a una media fija. El logaritmo no diferencia la "
+               "serie: mide los cambios en proporción al precio y estabiliza la varianza.")
+
+    st.subheader("2. Diferenciación hasta que la serie sea estacionaria")
+    st.latex(r"r_t = \nabla \ln P_t = \ln P_t - \ln P_{t-1} \qquad \Longleftrightarrow \qquad \ln P_t = \ln P_{t-1} + r_t")
+    st.markdown("El log-retorno **es** la primera diferencia de ln(precio). Volver al precio es *integrar*: "
+                r"$\hat P_{t+1} = P_t \, e^{\hat r_{t+1}}$. Por eso un ARMA(p, q) sobre el log-retorno es un "
+                "**ARIMA(p, 1, q)** sobre ln(precio), y el AR(p) de la app es un ARIMA(p, 1, 0).")
+    st.markdown("**Prueba de Dickey-Fuller aumentada (ADF).** H₀: la serie tiene raíz unitaria (no es estacionaria). "
+                f"Si el p-valor es menor que {config.ALFA_ADF}, se rechaza H₀ y la serie se considera estacionaria; si "
+                "no, se diferencia una vez más y se repite la prueba.")
+    st.dataframe(pd.DataFrame({
+        "diferencias (d)": [paso["d"] for paso in analisis["pasos"]],
+        "serie": [paso["serie"] for paso in analisis["pasos"]],
+        "estadístico ADF": [round(paso["estadistico"], 3) for paso in analisis["pasos"]],
+        "valor crítico 5%": [round(paso["critico_5"], 3) for paso in analisis["pasos"]],
+        "p-valor": [texto_p_valor(paso["p_valor"]) for paso in analisis["pasos"]],
+        "rezagos usados": [paso["rezagos"] for paso in analisis["pasos"]],
+        "conclusión": ["Estacionaria" if paso["estacionaria"] else "No estacionaria" for paso in analisis["pasos"]],
+    }), hide_index=True)
+    ultimo_paso = analisis["pasos"][-1]
+    if ultimo_paso["estacionaria"]:
+        st.success(f"Con **d = {analisis['d']}** la serie ya es estacionaria: {ultimo_paso['serie']}. "
+                   f"El orden de integración del ARIMA es d = {analisis['d']}.")
+    else:
+        st.warning("Ninguna de las diferencias probadas pasó la prueba ADF.")
+
+    retorno_pct = 100 * np.log(completas["Close"].astype(float)).diff()
+    fig_r = go.Figure(go.Scatter(x=x_serie, y=retorno_pct, mode="lines", name="Log-retorno",
                                  line=dict(color=COLOR_REAL, width=1)))
     fig_r.update_yaxes(ticksuffix="%")
-    c2.plotly_chart(estilo(fig_r, alto=320, titulo="Log-retorno por hora (oscila alrededor de 0)"), key="serie_retorno")
+    st.plotly_chart(estilo(fig_r, alto=320, titulo="Log-retorno por hora: la serie diferenciada oscila alrededor de 0"),
+                    key="serie_retorno")
+    c5, c6 = st.columns(2)
+    grafico_correlacion(analisis["acf_ret"], analisis["n"], "ACF del log-retorno", "serie_acf", c5)
+    grafico_correlacion(analisis["pacf_ret"], analisis["n"], "PACF del log-retorno", "serie_pacf", c6)
+    texto_p = f" El AR(p) eligió **p = {arts['resumen']['ar']['p']}** por validación cruzada." if arts else ""
+    st.caption("Las barras que salen de la franja punteada son autocorrelaciones significativas al 5%. La ACF sugiere el "
+               "orden q de la parte MA y la PACF el orden p de la parte AR. En naranja, los rezagos de "
+               f"{VELAS_SESION}, {2 * VELAS_SESION}, {3 * VELAS_SESION}… horas (una sesión de {VELAS_SESION} velas, "
+               f"dos sesiones…): si sobresalen, hay estacionalidad diaria.{texto_p}")
 
-    tabla_adf, valores_acf, valores_pacf, n_retornos = analisis_serie(ticker, INTERVALO, ultima_iso)
-    st.markdown("**Prueba de Dickey-Fuller aumentada (ADF).** Hipótesis nula: la serie tiene raíz unitaria "
-                "(no es estacionaria). Si el p-valor es menor que 0.05, se rechaza y la serie se considera estacionaria.")
-    st.dataframe(tabla_adf, hide_index=True)
+    if not arts or "arima" not in arts["resumen"]:
+        st.info("Los pasos 3 y 4 aparecen cuando se entrena el ARIMA con:")
+        st.code(f"python entrenar.py --ticker {ticker}", language="bash")
+    else:
+        arima = arts["resumen"]["arima"]
+        carpeta_arima = arts["carpeta"]
 
-    banda = 1.96 / np.sqrt(n_retornos)
-    c3, c4 = st.columns(2)
-    for columna, valores, nombre, clave in ((c3, valores_acf, "ACF", "acf"), (c4, valores_pacf, "PACF", "pacf")):
-        rezagos = np.arange(1, len(valores) + 1)
-        fig_c = go.Figure(go.Bar(x=rezagos, y=valores, marker_color=COLOR_REAL, name=nombre))
-        for signo in (1, -1):
-            fig_c.add_hline(y=signo * banda, line_dash="dash", line_color=COLOR_REFERENCIA)
-        fig_c.update_xaxes(title="Rezago (horas)")
-        columna.plotly_chart(estilo(fig_c, alto=300, titulo=f"{nombre} de los log-retornos", saltos=False), key=f"serie_{clave}")
-    texto_p = f" El entrenamiento eligió **p = {arts['resumen']['ar']['p']}** por validación." if arts else ""
-    st.caption("Las barras que salen de la franja punteada son autocorrelaciones significativas al 5%. "
-               f"La PACF sugiere cuántos rezagos usar en un AR(p).{texto_p}")
+        st.subheader("3. Identificación y selección del modelo")
+        busqueda = pd.read_csv(carpeta_arima / "busqueda_arima.csv")
+        st.markdown(f"Se ajustaron **{len(busqueda)} modelos ARMA(p, q)**, con p de 0 a {int(busqueda['p'].max())} y q "
+                    f"de 0 a {int(busqueda['q'].max())}, sobre el log-retorno del tramo de desarrollo, por máxima "
+                    "verosimilitud. Gana el de **menor AIC** entre los que convergen y quedan estacionarios e "
+                    f"invertibles: **{arima['nombre']}** (AIC {arima['aic']:.1f}, BIC {arima['bic']:.1f}).")
+        tabla_aic = busqueda.pivot(index="p", columns="q", values="aic").sort_index()
+        validos = busqueda.pivot(index="p", columns="q", values="valido").reindex_like(tabla_aic)
+        diferencia = tabla_aic.to_numpy() - arima["aic"]
+        textos = [[(f"{v:.1f}" if ok else f"{v:.1f} (descartado)") for v, ok in zip(fila_v, fila_ok)]
+                  for fila_v, fila_ok in zip(diferencia, validos.to_numpy())]
+        fig_aic = go.Figure(go.Heatmap(z=diferencia, x=[f"q = {q}" for q in tabla_aic.columns],
+                                       y=[f"p = {p}" for p in tabla_aic.index], text=textos, texttemplate="%{text}",
+                                       colorscale="Blues_r", showscale=False,
+                                       hovertemplate="%{y}, %{x}<br>AIC - AIC mínimo = %{z:.2f}<extra></extra>"))
+        fig_aic.update_yaxes(autorange="reversed")
+        c7, c8 = st.columns([3, 2])
+        c7.plotly_chart(estilo(fig_aic, alto=320, titulo="AIC de cada ARMA(p, q) menos el AIC del elegido (0 = elegido)",
+                               saltos=False, hover="closest"), key="arima_aic")
+        c8.markdown("**Modelo elegido**, sobre el log-retorno en %:")
+        c8.latex(ecuacion_arima(arima))
+        c8.markdown(f"Media μ = {arima['constante']:.4f}% por hora y varianza del ruido σ² = {arima['sigma2']:.4f}. "
+                    "Como el modelo es estacionario, su pronóstico a varias horas tiende a μ: después de pocas horas "
+                    "el ARIMA, igual que el AR, pronostica que el precio crece a ese ritmo constante.")
+        with c8.expander("Tabla completa de la búsqueda"):
+            st.dataframe(busqueda, hide_index=True)
+
+        filas_raices = []
+        for polinomio, raices in (("AR", arima["raices_ar"]), ("MA", arima["raices_ma"])):
+            for real, imaginaria in raices:
+                modulo = float(np.hypot(real, imaginaria))
+                filas_raices.append({"polinomio": polinomio,
+                                     "raíz": f"{real:.3f} {'+' if imaginaria >= 0 else '-'} {abs(imaginaria):.3f}i",
+                                     "módulo": round(modulo, 3),
+                                     "fuera del círculo unitario": "sí" if modulo > 1 else "no"})
+        st.markdown("**Raíces de los polinomios.** El modelo es **estacionario** si todas las raíces del polinomio AR "
+                    "quedan fuera del círculo unitario, e **invertible** si también quedan fuera las del polinomio MA.")
+        if filas_raices:
+            c9, c10 = st.columns([2, 3])
+            c9.dataframe(pd.DataFrame(filas_raices), hide_index=True)
+            angulo = np.linspace(0, 2 * np.pi, 200)
+            fig_raiz = go.Figure(go.Scatter(x=np.cos(angulo), y=np.sin(angulo), mode="lines", name="Círculo unitario",
+                                            line=dict(color=COLOR_REFERENCIA, dash="dash"), hoverinfo="skip"))
+            for polinomio, raices, color in (("AR", arima["raices_ar"], COLORES_MODELO["ARIMA"]),
+                                             ("MA", arima["raices_ma"], COLORES_MODELO["Prophet"])):
+                if raices:
+                    inversas = 1 / np.array([complex(real, imaginaria) for real, imaginaria in raices])
+                    fig_raiz.add_trace(go.Scatter(x=inversas.real, y=inversas.imag, mode="markers",
+                                                  name=f"Raíces inversas {polinomio}", marker=dict(size=11, color=color)))
+            fig_raiz.update_xaxes(range=[-1.2, 1.2], zeroline=True)
+            fig_raiz.update_yaxes(range=[-1.2, 1.2], zeroline=True, scaleanchor="x")
+            c10.plotly_chart(estilo(fig_raiz, alto=340, titulo="Raíces inversas: deben quedar dentro del círculo",
+                                    saltos=False, hover="closest"), key="arima_raices")
+        else:
+            st.caption("El modelo elegido no tiene parte AR ni MA: el log-retorno es su media más ruido blanco, es decir, "
+                       "el precio es una caminata aleatoria con deriva.")
+
+        st.subheader("4. Diagnóstico de los residuos")
+        diagnostico = arima["diagnostico"]
+        filas_diag = [{"prueba": f"Ljung-Box, {prueba['rezagos']} rezagos", "H₀": "los residuos no están correlacionados",
+                       "estadístico": round(prueba["estadistico"], 2), "p-valor": texto_p_valor(prueba["p_valor"]),
+                       "conclusión": ("No se rechaza: se comportan como ruido blanco" if prueba["p_valor"] >= 0.05
+                                      else "Se rechaza: queda autocorrelación")}
+                      for prueba in diagnostico["ljung_box"]]
+        jb = diagnostico["jarque_bera"]
+        filas_diag.append({"prueba": "Jarque-Bera", "H₀": "los residuos son normales",
+                           "estadístico": round(jb["estadistico"], 1), "p-valor": texto_p_valor(jb["p_valor"]),
+                           "conclusión": ("No se rechaza: son normales" if jb["p_valor"] >= 0.05
+                                          else "Se rechaza: no son normales")})
+        st.dataframe(pd.DataFrame(filas_diag), hide_index=True)
+        st.caption(f"Asimetría de los residuos: {jb['asimetria']:.2f}; curtosis: {jb['curtosis']:.1f} (una normal tiene "
+                   "0 y 3). Una curtosis alta indica colas pesadas: hay más horas con movimientos grandes de lo que "
+                   "predice una normal, algo típico de los retornos financieros. No sesga el pronóstico puntual, pero "
+                   "hace que los intervalos basados en la normal queden cortos.")
+        ruta_residuos = carpeta_arima / "residuos_arima.csv"
+        if ruta_residuos.exists():
+            teoricos, observados, acf_residuos, n_residuos = residuos_arima(str(ruta_residuos),
+                                                                            arts["resumen"]["entrenado_en"])
+            c11, c12 = st.columns(2)
+            fig_qq = go.Figure(go.Scatter(x=teoricos, y=observados, mode="markers", name="Residuos",
+                                          marker=dict(color=COLORES_MODELO["ARIMA"], size=4)))
+            limite = float(max(abs(teoricos).max(), 1))
+            fig_qq.add_trace(go.Scatter(x=[-limite, limite], y=[-limite, limite], mode="lines", name="Normal",
+                                        line=dict(color=COLOR_REFERENCIA, dash="dash")))
+            fig_qq.update_xaxes(title="Cuantil de una normal estándar")
+            fig_qq.update_yaxes(title="Residuo estandarizado")
+            c11.plotly_chart(estilo(fig_qq, alto=340, titulo="Gráfico QQ de los residuos", saltos=False,
+                                    hover="closest"), key="arima_qq")
+            grafico_correlacion(acf_residuos, n_residuos, "ACF de los residuos", "arima_acf_residuos", c12)
+            st.caption("Si los residuos fueran normales, los puntos del gráfico QQ seguirían la línea punteada; los "
+                       "extremos que se alejan son las colas pesadas. En la ACF de los residuos, las barras dentro de la "
+                       "franja indican que el modelo ya recogió la autocorrelación del log-retorno.")
 
 
 # ------------------------------------------------------------------ pestaña 4: evaluación
@@ -742,6 +936,7 @@ with tab_eval:
             cv = resumen["validacion_cruzada"]
             st.markdown(f"AR y redes eligen sus hiperparámetros con **validación cruzada temporal** "
                         f"(`TimeSeriesSplit`, {cv['pliegues']} pliegues) sobre entrenamiento + validación. "
+                        "ARIMA elige p y q con el **AIC** sobre ese mismo tramo, como en Box-Jenkins. "
                         "Prophet usa el tramo de validación, porque cada pliegue le exigiría decenas de ajustes más.")
             st.dataframe(pd.DataFrame(cv["tramos"]).rename_axis("pliegue").reset_index()
                          .assign(pliegue=lambda d: d["pliegue"] + 1), hide_index=True)
@@ -760,8 +955,7 @@ with tab_eval:
         fig = go.Figure(go.Bar(
             x=100 * con_acierto["acierto_direccion"], y=con_acierto["modelo"], orientation="h",
             error_x=dict(type="data", array=100 * con_acierto["margen_95"], color=COLOR_REFERENCIA),
-            marker_color=[color_modelo(m) if m in COLORES_MODELO or m.startswith("AR(") else COLOR_REFERENCIA
-                          for m in con_acierto["modelo"]],
+            marker_color=[color_modelo(m) for m in con_acierto["modelo"]],
             text=[f"{100 * v:.1f}%" for v in con_acierto["acierto_direccion"]], textposition="inside",
         ))
         fig.add_vline(x=50, line_dash="dash", line_color=COLOR_REFERENCIA)
@@ -772,13 +966,12 @@ with tab_eval:
                         key="eval_acierto")
         st.caption("Un modelo solo aporta si su acierto supera a las líneas base (gris) por más que el margen de error. "
                    "Si las barras de error se cruzan con el 50% o con 'Siempre sube', no hay evidencia de que prediga "
-                   "mejor que el azar. AR, Prophet, RNN y LSTM predicen el log-retorno (regresión) y aciertan cuando "
+                   "mejor que el azar. AR, ARIMA, Prophet, RNN y LSTM predicen el log-retorno (regresión) y aciertan cuando "
                    "su signo coincide con el del retorno real; la CNN de velas clasifica directamente (acierta cuando "
                    "da más de 50% y la hora sube, o menos de 50% y baja), por eso no tiene error del precio.")
 
         predicciones = pd.read_csv(carpeta / "predicciones_prueba.csv")
-        columnas_modelo = [c for c in predicciones.columns
-                           if c.startswith("AR(") or (c in COLORES_MODELO and c != velas_cnn.NOMBRE)]
+        columnas_modelo = [c for c in predicciones.columns if es_modelo(c) and c != velas_cnn.NOMBRE]
         elegido = st.selectbox("Comparar precio real y predicho", columnas_modelo)
         tramo = predicciones.tail(150)
         x = a_hora_ny(pd.to_datetime(tramo["marca_objetivo"], utc=True))
@@ -842,6 +1035,7 @@ with tab_eval:
                                 ("busqueda_lstm.csv", "Búsqueda de hiperparámetros: LSTM"),
                                 ("busqueda_cnn.csv", f"Búsqueda de hiperparámetros: {velas_cnn.NOMBRE}"),
                                 ("busqueda_ar.csv", "Selección de p para AR(p)"),
+                                ("busqueda_arima.csv", "Selección de p y q para ARIMA (AIC)"),
                                 ("busqueda_prophet.csv", "Búsqueda de hiperparámetros: Prophet")):
             if (carpeta / archivo).exists():
                 with st.expander(titulo):

@@ -1,6 +1,6 @@
 """Pronóstico a varias velas (horas) con los modelos ganadores.
 
-AR, RNN y LSTM se usan de forma recursiva: cada predicción se agrega a la historia y sirve de entrada
+AR, ARIMA, RNN y LSTM se usan de forma recursiva: cada predicción se agrega a la historia y sirve de entrada
 para la siguiente. Prophet evalúa directamente su función del tiempo en las horas futuras.
 """
 
@@ -67,6 +67,10 @@ def precios_futuros(f, posiciones, marcas, horizonte, artefactos=None, modelos_p
         parametros = artefactos["resumen"]["ar"]
         r = _recorridos_ar(parametros, f["log_ret"].to_numpy(dtype=float), posiciones, horizonte)
         resultado[f"AR({parametros['p']})"] = cierre * np.exp(np.cumsum(r, axis=1))
+        if "arima" in artefactos["resumen"]:
+            arima = artefactos["resumen"]["arima"]
+            r = modelos_series.predecir_arima(arima, f["log_ret"].to_numpy(dtype=float), posiciones, horizonte)
+            resultado[arima["nombre"]] = cierre * np.exp(np.cumsum(r, axis=1))
     if modelos_prophet is not None and all(m is not None for m in modelos_prophet):
         resultado["Prophet"] = np.stack([
             modelos_series.pronosticar_prophet(modelo, marca)["yhat_precio"].to_numpy()

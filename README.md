@@ -1,11 +1,12 @@
 # Predicción de acciones: series de tiempo (stdg) + aprendizaje profundo (appr)
 
 Dashboard en Streamlit que descarga precios con **yfinance**, los va guardando automáticamente y predice si
-la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con cinco modelos:
+la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con seis modelos:
 
 | Modelo | Materia | Qué hace | Archivo |
 |---|---|---|---|
 | AR(p) | Series de tiempo | Regresión lineal del retorno sobre sus `p` retornos anteriores | `modelos_series.py` |
+| ARIMA(p, d, q) | Series de tiempo | Box-Jenkins: `d` por la prueba ADF, ARMA(p, q) sobre la serie diferenciada y `p`, `q` por AIC | `modelos_series.py` |
 | Prophet | Series de tiempo | Tendencia + estacionalidad diaria y semanal sobre log(precio) | `modelos_series.py` |
 | RNN simple | Aprendizaje profundo | Red recurrente sobre ventanas de las últimas velas | `modelos_redes.py` |
 | LSTM | Aprendizaje profundo | Igual, con celdas LSTM (memoria de largo plazo) | `modelos_redes.py` |
@@ -63,7 +64,7 @@ Consulta cada 2 minutos con el mercado abierto y cada 30 minutos con el mercado 
 ### Qué se predice
 
 Con las velas de **1 hora**: dado el cierre de la última vela completa, ¿la vela siguiente cerrará arriba o abajo?
-AR, Prophet, RNN y LSTM predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)` (regresión), y de
+AR, ARIMA, Prophet, RNN y LSTM predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)` (regresión), y de
 ahí salen el precio predicho y la dirección. La **CNN de velas** responde directamente si sube o baja
 (clasificación) mirando una imagen de las últimas velas. Se usan retornos y no precios porque el precio no es estacionario (la pestaña
 *Análisis de la serie* lo muestra con la prueba ADF) y una red que predice precios aprende a copiar el último valor.
@@ -85,8 +86,11 @@ dirección que dijeron los modelos.
    datos posteriores a los de validación. Cada combinación se califica con el RMSE promedio de los pliegues y la
    mejor se reentrena con todo el desarrollo (las redes, durante el promedio de épocas que necesitaron en los
    pliegues). El escalado se ajusta en cada pliegue solo con su parte de entrenamiento. Prophet usa el tramo de
-   validación, porque cada pliegue le exigiría decenas de ajustes más.
+   validación, porque cada pliegue le exigiría decenas de ajustes más. ARIMA sigue a Box-Jenkins y elige con el AIC
+   sobre el desarrollo.
    - AR: `p` de 1 a 10.
+   - ARIMA: `d` con la prueba de Dickey-Fuller aumentada sobre ln(precio) y `p`, `q` de 0 a 3 (16 modelos), por
+     máxima verosimilitud; gana el de menor AIC entre los que convergen y quedan estacionarios e invertibles.
    - Prophet: `changepoint_prior_scale` {0.01, 0.05, 0.3} × `seasonality_prior_scale` {0.1, 1, 10}.
    - RNN y LSTM: ventana {7, 14, 35 velas ≈ 1 día, 2 días, 1 semana} × unidades {32, 64} × capas {1, 2} ×
      tasa de aprendizaje {0.01, 0.05, 0.1}. Los pesos se ajustan con **descenso de gradiente estocástico** (SGD,
@@ -115,6 +119,27 @@ La red tiene dos bloques de convolución (filtros de 3 × 3 con ReLU) y *max poo
 una neurona de salida con sigmoide, que da la probabilidad de que la hora siguiente suba. Las convoluciones aprenden
 a reconocer patrones locales, como varias velas rojas seguidas o una mecha larga, en cualquier parte de la imagen.
 
+### ARIMA y la serie original (pestaña *Análisis de la serie*)
+
+La serie original es el precio; el ARIMA trabaja sobre `ln(precio)`. El log-retorno es su primera diferencia,
+`r_t = ln(P_t) - ln(P_(t-1))`, así que un ARMA(p, q) sobre el log-retorno es un ARIMA(p, 1, q) sobre ln(precio), y el
+AR(p) es un ARIMA(p, 1, 0). Para volver al precio se integra: `P_(t+1) = P_t · exp(r_(t+1))`.
+
+La pestaña sigue los pasos de Box-Jenkins:
+
+1. **Serie original**: toda la historia del precio y de ln(precio), con su ACF y su PACF.
+2. **Diferenciación**: prueba de Dickey-Fuller aumentada (H0: raíz unitaria) sobre ln(precio); si no es
+   estacionaria se diferencia y se repite la prueba. Muestra el log-retorno con su ACF y su PACF (35 rezagos, con los
+   múltiplos de 7 marcados: una sesión tiene 7 velas de 1 hora).
+3. **Selección**: AIC de cada ARMA(p, q), la ecuación del elegido y sus raíces (estacionario si las del AR quedan
+   fuera del círculo unitario, invertible si también las del MA).
+4. **Diagnóstico de residuos**: Ljung-Box a 7 y 14 rezagos (H0: sin autocorrelación), Jarque-Bera (H0:
+   normalidad), gráfico QQ y ACF de los residuos.
+
+Un ARMA estacionario pronostica que el log-retorno vuelve a su media, así que a varias horas el ARIMA, igual que
+el AR, pronostica un precio que crece a un ritmo constante. Las rejillas están en `config.py` (`ARIMA_MAX_P`,
+`ARIMA_MAX_Q`) y la búsqueda queda en `busqueda_arima.csv`.
+
 ### Prophet en una línea
 
 `log(precio) = tendencia(t) + efecto de la hora del día + efecto del día de la semana + ruido`. Es una regresión
@@ -124,7 +149,7 @@ cada componente por separado.
 ### Pronóstico a varias horas (pestaña *Varias horas*)
 
 Además de la próxima hora, el dashboard pronostica de 1 a 35 horas de mercado hacia adelante con el modelo ganador
-de cada tipo. AR, RNN y LSTM lo hacen de forma **recursiva**: predicen una hora, toman esa predicción como dato y
+de cada tipo. AR, ARIMA, RNN y LSTM lo hacen de forma **recursiva**: predicen una hora, toman esa predicción como dato y
 siguen con la siguiente. Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
 de las últimas 10 sesiones para compararlo con lo que pasó, y calcular el error promedio y el acierto de dirección
 según el horizonte. La franja gris es el rango del 80% de una caminata aleatoria con la volatilidad reciente.

@@ -1,4 +1,4 @@
-"""Entrena y evalúa AR(p), Prophet, RNN, LSTM y la CNN de velas para una acción.
+"""Entrena y evalúa AR(p), ARIMA(p, d, q), Prophet, RNN, LSTM y la CNN de velas para una acción.
 
 Uso:
     python entrenar.py                         # AAPL con velas de 1 hora
@@ -95,7 +95,7 @@ def main():
     salida = config.directorio_modelos(ticker, intervalo)
     salida.mkdir(parents=True, exist_ok=True)
 
-    print("\n[1/5] AR(p) sobre log-retornos")
+    print("\n[1/6] AR(p) sobre log-retornos")
     p, modelo_ar, tabla_ar = modelos_series.buscar_ar(f, cortes, k=k)
     pred_ar = modelos_series.predecir_ar(modelo_ar, f, p, a, b)
     predicciones[f"AR({p})"] = pred_ar
@@ -104,8 +104,37 @@ def main():
     tabla_ar.to_csv(salida / "busqueda_ar.csv", index=False)
     print(f"  p elegido = {p}")
 
+    print("\n[2/6] ARIMA(p, d, q) con la metodología de Box-Jenkins")
+    log_precio_desarrollo = np.log(f["cierre"].to_numpy(dtype=float)[: cortes.fin_validacion + 1])
+    d, pasos_adf = modelos_series.orden_integracion(log_precio_desarrollo)
+    for paso in pasos_adf:
+        print(f"  ADF sobre {paso['serie']}: estadístico {paso['estadistico']:.3f}, p-valor {paso['p_valor']:.4f} "
+              f"-> {'estacionaria' if paso['estacionaria'] else 'no estacionaria'}")
+    if d != 1:
+        print(f"  Aviso: la prueba ADF sugiere d = {d}; el ARIMA se ajusta sobre el log-retorno (d = 1).")
+    p_max, q_max = ((config.ARIMA_MAX_P_RAPIDO, config.ARIMA_MAX_Q_RAPIDO) if args.rapido
+                    else (config.ARIMA_MAX_P, config.ARIMA_MAX_Q))
+
+    def informar_arima(numero, total, fila):
+        nota = "" if fila["valido"] else " (descartado: no converge o no es estacionario e invertible)"
+        print(f"  {numero:>2}/{total} ARIMA({fila['p']},1,{fila['q']}) -> AIC={fila['aic']:.1f} "
+              f"BIC={fila['bic']:.1f}{nota}")
+
+    arima, tabla_arima, residuos_arima = modelos_series.buscar_arima(f, cortes, p_max, q_max, informar_arima)
+    arima["integracion"] = pasos_adf
+    pred_arima = modelos_series.predecir_arima(arima, f["log_ret"].to_numpy(dtype=float), range(a, b))[:, 0]
+    predicciones[arima["nombre"]] = pred_arima
+    filas_metricas.append(evaluacion.metricas(arima["nombre"], r_real, cierre_actual, r_pred=pred_arima))
+    resumen["arima"] = arima
+    tabla_arima.to_csv(salida / "busqueda_arima.csv", index=False)
+    pd.DataFrame({"marca": marcas[: len(residuos_arima)], "residuo_pct": residuos_arima}).to_csv(
+        salida / "residuos_arima.csv", index=False)
+    for prueba in arima["diagnostico"]["ljung_box"]:
+        print(f"  Ljung-Box de los residuos ({prueba['rezagos']} rezagos): p-valor {prueba['p_valor']:.4f}")
+    print(f"  elegido por AIC: {arima['nombre']}")
+
     if not args.sin_prophet:
-        print("\n[2/5] Prophet sobre log(precio)")
+        print("\n[3/6] Prophet sobre log(precio)")
         if args.rapido:
             parametros = modelos_series.parametros_prophet()
             dias = config.PROPHET_DIAS_ENTRE_REAJUSTES_VALIDACION
@@ -128,9 +157,9 @@ def main():
 
     rejilla = config.REJILLA_REDES_RAPIDA if args.rapido else config.REJILLA_REDES
     resumen["redes"] = {}
-    for paso, tipo in ((3, "rnn"), (4, "lstm")):
+    for paso, tipo in ((4, "rnn"), (5, "lstm")):
         nombre = modelos_redes.TIPOS[tipo]
-        print(f"\n[{paso}/5] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
+        print(f"\n[{paso}/6] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
 
         def informar(numero, total, fila):
             print(f"  {numero:>2}/{total} ventana={fila['ventana']:<3} unidades={fila['unidades']:<3} "
@@ -152,7 +181,7 @@ def main():
         tabla.to_csv(salida / f"busqueda_{tipo}.csv", index=False)
         resumen["redes"][tipo] = {**mejor["fila"], "optimizador": config.OPTIMIZADOR}
 
-    print(f"\n[5/5] {velas_cnn.NOMBRE}: clasificación de imágenes de velas (optimizador {config.OPTIMIZADOR})")
+    print(f"\n[6/6] {velas_cnn.NOMBRE}: clasificación de imágenes de velas (optimizador {config.OPTIMIZADOR})")
 
     def informar_cnn(numero, total, fila):
         print(f"  {numero:>2}/{total} velas={fila['velas']:<3} filtros={fila['filtros']:<3} tasa={fila['tasa']} "
