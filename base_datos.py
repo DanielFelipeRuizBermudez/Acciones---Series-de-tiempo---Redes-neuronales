@@ -9,6 +9,10 @@ pública del usuario (llaves.py): solo su llave privada, protegida con su contra
 creadas antes de ese cambio tienen todavía una copia del correo cifrada con Fernet, que se borra cuando el usuario
 completa sus datos. El portafolio, las operaciones, el uso del agente y su historial solo se relacionan con el usuario
 por su token aleatorio. La auditoría del agente no guarda ni el token ni el texto de las preguntas.
+
+Para recuperar una cuenta (recuperacion.py) se guardan el hash bcrypt del código enviado al correo, que vence en
+minutos; la copia de rescate de la llave privada, cifrada con la llave pública de emergencia, solo si el usuario la
+activó, y el registro de cada recuperación.
 """
 
 import base64
@@ -118,6 +122,29 @@ _TABLAS = (
         id {clave_autonumerica},
         solicitud_id BIGINT NOT NULL REFERENCES solicitudes_acceso (id) ON DELETE CASCADE,
         visto_en TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS llaves_rescate (
+        token TEXT PRIMARY KEY REFERENCES usuarios (token) ON DELETE CASCADE,
+        sobre TEXT NOT NULL,
+        huella_emergencia TEXT NOT NULL,
+        creada_en TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS codigos_recuperacion (
+        token TEXT PRIMARY KEY REFERENCES usuarios (token) ON DELETE CASCADE,
+        hash_codigo TEXT NOT NULL,
+        creado_en TEXT NOT NULL,
+        expira_en TEXT NOT NULL,
+        intentos INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS recuperaciones (
+        id {clave_autonumerica},
+        token TEXT NOT NULL REFERENCES usuarios (token) ON DELETE CASCADE,
+        estado TEXT NOT NULL CHECK (estado IN ('pendiente', 'lista', 'completada', 'sin_rescate', 'cancelada')),
+        creada_en TEXT NOT NULL,
+        vidrio_roto_en TEXT,
+        completada_en TEXT,
+        llave_temporal TEXT,
+        sobre_llave TEXT
     )""",
 )
 

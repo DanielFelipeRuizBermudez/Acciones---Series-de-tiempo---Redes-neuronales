@@ -111,13 +111,22 @@ def orden_integracion(log_precio, alfa=config.ALFA_ADF, d_max=2):
     return d_max, pasos
 
 
+REQUISITOS_ARIMA = {
+    "estacionario": "Estacionario: raíces del AR fuera del círculo unitario",
+    "invertible": "Invertible: raíces del MA fuera del círculo unitario",
+    "coef_significativos": "Coeficientes AR y MA significativos",
+    "sin_autocorrelacion": "Residuos sin autocorrelación (Ljung-Box)",
+    "residuos_normales": "Residuos normales (Jarque-Bera)",
+}
+
+
 def ajustar_arma(w, p, q):
-    """ARMA(p, q) con media, por máxima verosimilitud, restringido a la región estacionaria e invertible."""
+    """ARMA(p, q) con media, por máxima verosimilitud, con errores estándar robustos (sándwich)."""
     from statsmodels.tsa.arima.model import ARIMA
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return ARIMA(np.asarray(w, dtype=float), order=(p, 0, q), trend="c").fit()
+        return ARIMA(np.asarray(w, dtype=float), order=(p, 0, q), trend="c").fit(cov_type="robust")
 
 
 def diagnostico_residuos(residuos, p, q, rezagos=config.LJUNG_BOX_REZAGOS):
@@ -136,12 +145,69 @@ def diagnostico_residuos(residuos, p, q, rezagos=config.LJUNG_BOX_REZAGOS):
     }
 
 
+def coeficientes_arima(ajuste, alfa=config.ALFA_PRUEBAS):
+    """Prueba z de cada coeficiente (H0: vale 0) con errores estándar robustos e intervalo del 95%."""
+    from scipy import stats
+
+    filas = []
+    for nombre, estimacion, error in zip(ajuste.model.param_names, np.asarray(ajuste.params, dtype=float),
+                                         np.asarray(ajuste.bse, dtype=float)):
+        if nombre == "sigma2":
+            continue
+        z = estimacion / error if np.isfinite(error) and error > 0 else np.nan
+        p_valor = float(2 * stats.norm.sf(abs(z))) if np.isfinite(z) else np.nan
+        filas.append({"parametro": nombre, "estimacion": float(estimacion), "error_estandar": float(error),
+                      "z": float(z), "p_valor": p_valor, "ic_bajo": float(estimacion - 1.96 * error),
+                      "ic_alto": float(estimacion + 1.96 * error),
+                      "significativo": bool(np.isfinite(p_valor) and p_valor < alfa)})
+    return filas
+
+
+def correlacion_estimaciones(ajuste):
+    """Correlación entre las estimaciones de los coeficientes AR y MA."""
+    nombres = list(ajuste.model.param_names)
+    indices = [i for i, n in enumerate(nombres) if n.startswith(("ar.", "ma."))]
+    if len(indices) < 2:
+        return {"nombres": [nombres[i] for i in indices], "matriz": []}
+    covarianza = np.asarray(ajuste.cov_params(), dtype=float)[np.ix_(indices, indices)]
+    desvio = np.sqrt(np.diag(covarianza))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        matriz = covarianza / np.outer(desvio, desvio)
+    return {"nombres": [nombres[i] for i in indices],
+            "matriz": [[float(v) if np.isfinite(v) else None for v in fila] for fila in matriz]}
+
+
+def raices_casi_comunes(raices_ar, raices_ma, distancia=config.DISTANCIA_RAICES_COMUNES):
+    """True si alguna raíz del AR casi coincide con una del MA: se cancelan y el modelo sobra parámetros."""
+    ar = np.atleast_1d(raices_ar)
+    ma = np.atleast_1d(raices_ma)
+    if ar.size == 0 or ma.size == 0:
+        return False
+    return bool(np.min(np.abs(ar[:, None] - ma[None, :])) < distancia)
+
+
+def requisitos_arima(ajuste, p, q, alfa=config.ALFA_PRUEBAS):
+    """Evalúa los requisitos de Box-Jenkins sobre un ajuste. Devuelve (cumple, coeficientes, diagnóstico)."""
+    coeficientes = coeficientes_arima(ajuste, alfa)
+    diagnostico = diagnostico_residuos(ajuste.resid, p, q)
+    p_ljung = min(prueba["p_valor"] for prueba in diagnostico["ljung_box"])
+    cumple = {
+        "estacionario": bool(np.all(np.abs(np.atleast_1d(ajuste.arroots)) > 1)),
+        "invertible": bool(np.all(np.abs(np.atleast_1d(ajuste.maroots)) > 1)),
+        "coef_significativos": all(c["significativo"] for c in coeficientes if c["parametro"].startswith(("ar.", "ma."))),
+        "sin_autocorrelacion": bool(np.isfinite(p_ljung) and p_ljung >= alfa),
+        "residuos_normales": bool(diagnostico["jarque_bera"]["p_valor"] >= alfa),
+    }
+    return cumple, coeficientes, diagnostico
+
+
 def _raices(valores):
     return [[float(np.real(z)), float(np.imag(z))] for z in np.atleast_1d(valores)]
 
 
 def arima_a_dict(ajuste, p, q, d=1):
     valores = dict(zip(ajuste.model.param_names, np.asarray(ajuste.params, dtype=float)))
+    cumple, coeficientes, diagnostico = requisitos_arima(ajuste, p, q)
     return {
         "p": p, "d": d, "q": q, "nombre": f"ARIMA({p},{d},{q})", "escala": ESCALA_ARIMA,
         "constante": float(valores.get("const", 0.0)),
@@ -151,14 +217,21 @@ def arima_a_dict(ajuste, p, q, d=1):
         "aic": float(ajuste.aic), "bic": float(ajuste.bic),
         "raices_ar": _raices(ajuste.arroots),
         "raices_ma": _raices(ajuste.maroots),
-        "diagnostico": diagnostico_residuos(ajuste.resid, p, q),
+        "raices_casi_comunes": raices_casi_comunes(ajuste.arroots, ajuste.maroots),
+        "coeficientes": coeficientes,
+        "correlacion": correlacion_estimaciones(ajuste),
+        "requisitos": cumple,
+        "requisitos_cumplidos": int(sum(cumple.values())),
+        "diagnostico": diagnostico,
     }
 
 
 def buscar_arima(f, cortes, p_max=config.ARIMA_MAX_P, q_max=config.ARIMA_MAX_Q, al_terminar=None):
-    """Ajusta ARMA(p, q) sobre el log-retorno (en %) del tramo de desarrollo y elige el de menor AIC.
+    """Ajusta ARMA(p, q) sobre el log-retorno (en %) del tramo de desarrollo y elige con los requisitos de Box-Jenkins.
 
-    Solo compiten los ajustes que convergieron y quedaron estacionarios e invertibles.
+    Gana el que cumple más requisitos (estacionario, invertible, coeficientes significativos, residuos sin
+    autocorrelación y residuos normales); entre los que cumplen los mismos, el de menor AIC. Solo compiten los
+    ajustes que convergieron, si hay alguno.
     Devuelve (parámetros del elegido, tabla de la búsqueda, residuos del elegido).
     """
     w = ESCALA_ARIMA * f["log_ret"].to_numpy(dtype=float)[: cortes.fin_validacion + 1]
@@ -167,22 +240,24 @@ def buscar_arima(f, cortes, p_max=config.ARIMA_MAX_P, q_max=config.ARIMA_MAX_Q, 
     for numero, (p, q) in enumerate(combinaciones, start=1):
         ajuste = ajustar_arma(w, p, q)
         retornos_mle = ajuste.mle_retvals if isinstance(ajuste.mle_retvals, dict) else {}
-        estacionario = bool(np.all(np.abs(np.atleast_1d(ajuste.arroots)) > 1))
-        invertible = bool(np.all(np.abs(np.atleast_1d(ajuste.maroots)) > 1))
-        convergio = bool(retornos_mle.get("converged", True))
+        cumple, coeficientes, diagnostico = requisitos_arima(ajuste, p, q)
         fila = {"p": p, "q": q, "aic": float(ajuste.aic), "bic": float(ajuste.bic),
-                "log_verosimilitud": float(ajuste.llf), "estacionario": estacionario, "invertible": invertible,
-                "convergio": convergio, "valido": estacionario and invertible and convergio}
+                "log_verosimilitud": float(ajuste.llf), "convergio": bool(retornos_mle.get("converged", True)),
+                **cumple, "requisitos": int(sum(cumple.values())),
+                "ljung_box_p": min(prueba["p_valor"] for prueba in diagnostico["ljung_box"]),
+                "jarque_bera_p": diagnostico["jarque_bera"]["p_valor"],
+                "raices_casi_comunes": raices_casi_comunes(ajuste.arroots, ajuste.maroots)}
         filas.append(fila)
         ajustes[(p, q)] = ajuste
         if al_terminar:
             al_terminar(numero, len(combinaciones), fila)
     tabla = pd.DataFrame(filas)
-    candidatas = tabla[tabla["valido"]] if tabla["valido"].any() else tabla
-    elegida = candidatas.loc[candidatas["aic"].idxmin()]
+    candidatas = tabla[tabla["convergio"]] if tabla["convergio"].any() else tabla
+    elegida = candidatas.sort_values(["requisitos", "aic"], ascending=[False, True]).iloc[0]
     p, q = int(elegida["p"]), int(elegida["q"])
+    tabla["elegido"] = (tabla["p"] == p) & (tabla["q"] == q)
+    tabla = tabla.sort_values(["requisitos", "aic"], ascending=[False, True]).reset_index(drop=True)
     ajuste = ajustes[(p, q)]
-    tabla = tabla.sort_values("aic").reset_index(drop=True)
     return arima_a_dict(ajuste, p, q), tabla, np.asarray(ajuste.resid, dtype=float)
 
 

@@ -10,6 +10,10 @@
   no se puede abrir.
 - Para compartir datos, el titular abre su sobre con su llave privada y crea un sobre nuevo, solo con los campos que
   elige, cifrado con la llave pública de quien los pidió.
+- Llave de emergencia (opcional, break-glass): si el titular lo autoriza, se guarda además una copia de su llave
+  privada en un sobre cifrado con la llave pública de emergencia. La llave privada de emergencia nunca está en el
+  servidor: el administrador la guarda fuera de la aplicación, protegida con una frase, y solo la usa para que un
+  usuario que olvidó su contraseña recupere sus datos (recuperacion.py).
 """
 
 import base64
@@ -54,12 +58,46 @@ def proteger_privada(privada, contrasena, iteraciones=ITERACIONES):
     return {"privada_cifrada": _b64(cifrada), "sal": _b64(sal), "nonce": _b64(nonce), "iteraciones": iteraciones}
 
 
+def publica_pem(privada):
+    return privada.public_key().public_bytes(serialization.Encoding.PEM,
+                                             serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii")
+
+
+def nuevo_par(contrasena):
+    """(par guardable, llave privada): el par trae la pública en PEM y la privada cifrada con la contraseña."""
+    privada = rsa.generate_private_key(public_exponent=65537, key_size=BITS_RSA)
+    return {"publica": publica_pem(privada), **proteger_privada(privada, contrasena)}, privada
+
+
 def generar_par(contrasena):
     """Par nuevo: {'publica' (PEM), 'privada_cifrada', 'sal', 'nonce', 'iteraciones'}."""
+    return nuevo_par(contrasena)[0]
+
+
+def exportar_privada(privada):
+    """Llave privada en DER y base64, para meterla dentro de un sobre cifrado (nunca se guarda así en claro)."""
+    return _b64(privada.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()))
+
+
+def importar_privada(texto):
+    return serialization.load_der_private_key(_de_b64(texto), password=None)
+
+
+def crear_llave_emergencia(frase):
+    """Par de emergencia: (privada en PEM cifrada con la frase, pública en PEM)."""
     privada = rsa.generate_private_key(public_exponent=65537, key_size=BITS_RSA)
-    publica = privada.public_key().public_bytes(serialization.Encoding.PEM,
-                                                serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii")
-    return {"publica": publica, **proteger_privada(privada, contrasena)}
+    cifrada = privada.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.BestAvailableEncryption(frase.encode("utf-8")))
+    return cifrada, publica_pem(privada)
+
+
+def cargar_llave_emergencia(pem, frase):
+    """Llave privada de emergencia desde su archivo PEM y su frase, o LlaveNoAbre."""
+    try:
+        return serialization.load_pem_private_key(pem, password=frase.encode("utf-8"))
+    except (ValueError, TypeError) as error:
+        raise LlaveNoAbre("La frase o el archivo de la llave de emergencia no son correctos.") from error
 
 
 def abrir_privada(guardada, contrasena):

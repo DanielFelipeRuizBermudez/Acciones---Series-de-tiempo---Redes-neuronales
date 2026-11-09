@@ -6,7 +6,7 @@ la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con seis mo
 | Modelo | Materia | Qué hace | Archivo |
 |---|---|---|---|
 | AR(p) | Series de tiempo | Regresión lineal del retorno sobre sus `p` retornos anteriores | `modelos_series.py` |
-| ARIMA(p, d, q) | Series de tiempo | Box-Jenkins: `d` por la prueba ADF, ARMA(p, q) sobre la serie diferenciada y `p`, `q` por AIC | `modelos_series.py` |
+| ARIMA(p, d, q) | Series de tiempo | Box-Jenkins: `d` por la prueba ADF, ARMA(p, q) sobre la serie diferenciada y `p`, `q` por requisitos (raíces, coeficientes y residuos) y AIC | `modelos_series.py` |
 | Prophet | Series de tiempo | Tendencia + estacionalidad diaria y semanal sobre log(precio) | `modelos_series.py` |
 | RNN simple | Aprendizaje profundo | Red recurrente sobre ventanas de las últimas velas | `modelos_redes.py` |
 | LSTM | Aprendizaje profundo | Igual, con celdas LSTM (memoria de largo plazo) | `modelos_redes.py` |
@@ -86,11 +86,12 @@ dirección que dijeron los modelos.
    datos posteriores a los de validación. Cada combinación se califica con el RMSE promedio de los pliegues y la
    mejor se reentrena con todo el desarrollo (las redes, durante el promedio de épocas que necesitaron en los
    pliegues). El escalado se ajusta en cada pliegue solo con su parte de entrenamiento. Prophet usa el tramo de
-   validación, porque cada pliegue le exigiría decenas de ajustes más. ARIMA sigue a Box-Jenkins y elige con el AIC
-   sobre el desarrollo.
+   validación, porque cada pliegue le exigiría decenas de ajustes más. ARIMA sigue a Box-Jenkins y elige con sus
+   requisitos sobre el desarrollo.
    - AR: `p` de 1 a 10.
-   - ARIMA: `d` con la prueba de Dickey-Fuller aumentada sobre ln(precio) y `p`, `q` de 0 a 3 (16 modelos), por
-     máxima verosimilitud; gana el de menor AIC entre los que convergen y quedan estacionarios e invertibles.
+   - ARIMA: `d` con la prueba de Dickey-Fuller aumentada sobre ln(precio) y `p`, `q` de 0 a 5 (36 modelos), por
+     máxima verosimilitud con errores estándar robustos; gana el que cumple más requisitos de Box-Jenkins y, entre
+     los que cumplen los mismos, el de menor AIC.
    - Prophet: `changepoint_prior_scale` {0.01, 0.05, 0.3} × `seasonality_prior_scale` {0.1, 1, 10}.
    - RNN y LSTM: ventana {7, 14, 35 velas ≈ 1 día, 2 días, 1 semana} × unidades {32, 64} × capas {1, 2} ×
      tasa de aprendizaje {0.01, 0.05, 0.1}. Los pesos se ajustan con **descenso de gradiente estocástico** (SGD,
@@ -131,10 +132,22 @@ La pestaña sigue los pasos de Box-Jenkins:
 2. **Diferenciación**: prueba de Dickey-Fuller aumentada (H0: raíz unitaria) sobre ln(precio); si no es
    estacionaria se diferencia y se repite la prueba. Muestra el log-retorno con su ACF y su PACF (35 rezagos, con los
    múltiplos de 7 marcados: una sesión tiene 7 velas de 1 hora).
-3. **Selección**: AIC de cada ARMA(p, q), la ecuación del elegido y sus raíces (estacionario si las del AR quedan
-   fuera del círculo unitario, invertible si también las del MA).
-4. **Diagnóstico de residuos**: Ljung-Box a 7 y 14 rezagos (H0: sin autocorrelación), Jarque-Bera (H0:
-   normalidad), gráfico QQ y ACF de los residuos.
+3. **Estimación y selección**: se ajustan los 36 ARMA(p, q) con p y q de 0 a 5 y cada uno se revisa con cinco
+   requisitos:
+
+   | Requisito | Cómo se verifica | Por qué |
+   |---|---|---|
+   | Estacionario | Raíces del AR fuera del círculo unitario | Con una raíz dentro o sobre el círculo, un choque no se desvanece y la varianza del pronóstico crece sin límite |
+   | Invertible | Raíces del MA fuera del círculo unitario | El modelo se escribe como un AR infinito sobre el pasado observado y la representación es única |
+   | Coeficientes significativos | Prueba z de cada φ y θ al 5%, con errores estándar robustos | Parsimonia: un coeficiente que no se distingue de 0 solo agrega varianza y es señal de sobreajuste |
+   | Residuos sin autocorrelación | Ljung-Box a 14 y 21 rezagos | Si queda autocorrelación, el pasado tiene información que el modelo no usó |
+   | Residuos normales | Jarque-Bera | La verosimilitud, las pruebas y los intervalos suponen errores normales |
+
+   Gana el que cumple los cinco; si ninguno, el que cumple más, y entre los que cumplen los mismos, el de menor AIC.
+   La pestaña muestra los requisitos de cada modelo, los coeficientes del elegido con su error estándar, su p-valor y
+   su intervalo del 95%, la correlación entre las estimaciones (cerca de ±1 indica parámetros de sobra) y las raíces.
+4. **Diagnóstico de residuos**: Ljung-Box (H0: sin autocorrelación), Jarque-Bera (H0: normalidad), gráfico QQ y ACF
+   de los residuos.
 
 Un ARMA estacionario pronostica que el log-retorno vuelve a su media, así que a varias horas el ARIMA, igual que
 el AR, pronostica un precio que crece a un ritmo constante. Las rejillas están en `config.py` (`ARIMA_MAX_P`,
@@ -148,11 +161,22 @@ cada componente por separado.
 
 ### Pronóstico a varias horas (pestaña *Varias horas*)
 
-Además de la próxima hora, el dashboard pronostica de 1 a 35 horas de mercado hacia adelante con el modelo ganador
-de cada tipo. AR, ARIMA, RNN y LSTM lo hacen de forma **recursiva**: predicen una hora, toman esa predicción como dato y
-siguen con la siguiente. Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
+Además de la próxima hora, el dashboard pronostica **hora por hora** de 1 a 35 horas de mercado hacia adelante con el
+modelo ganador de cada tipo. AR, ARIMA, RNN y LSTM lo hacen de forma **recursiva**: predicen la hora siguiente, esa
+predicción entra a la ventana como si fuera un dato real y se predice la hora que sigue. La tabla *Paso a paso* muestra,
+para cada hora, la ventana que entró al modelo (con las predicciones marcadas), el log-retorno predicho y el precio.
+Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
 de las últimas 10 sesiones para compararlo con lo que pasó, y calcular el error promedio y el acierto de dirección
 según el horizonte. La franja gris es el rango del 80% de una caminata aleatoria con la volatilidad reciente.
+
+### Reentrenamiento diario (`.github/workflows/reentrenar.yml`)
+
+De lunes a viernes a las 21:45 UTC (16:45 en Bogotá, después del cierre), GitHub Actions descarga los datos nuevos,
+corre `python entrenar.py` (vuelve a elegir el ARIMA con sus requisitos y los hiperparámetros de los demás modelos) y
+guarda `datos/` y `modelos_entrenados/` en el repositorio, lo que hace que Streamlit Community Cloud se actualice.
+También se puede lanzar a mano desde la pestaña *Actions* del repositorio (*Run workflow*). Necesita que el
+repositorio permita escribir a los flujos: *Settings → Actions → General → Workflow permissions → Read and write
+permissions*. Antes de trabajar en el equipo local conviene hacer `git pull` para traer los modelos del día.
 
 ### Estrategias de compra y venta (pestaña *Estrategias*)
 
@@ -249,6 +273,35 @@ y el titular la ve; al vencer el plazo, o si el titular revoca el permiso, la co
 Las cuentas creadas antes de este cambio completan sus datos la próxima vez que entran al portafolio: se crean sus
 llaves, se acepta la política nueva y se borra la copia del correo que estaba cifrada con `CLAVE_DATOS`.
 
+### Recuperar la cuenta: código al correo y llave de emergencia (`recuperacion.py`)
+
+| Paso | Qué pasa |
+|---|---|
+| 1. Código al correo | En *Portafolio simulado → Olvidé mi contraseña* el usuario escribe su correo. Si coincide con el índice HMAC de una cuenta, se le envía a ese mismo correo un código de 6 dígitos (vence en 15 minutos, 5 intentos). Del código solo se guarda su hash bcrypt, y la respuesta en pantalla es la misma exista o no el correo. La app no descifra ningún correo: lo escribe el usuario |
+| 2. Contraseña nueva | Con el código, el usuario elige una contraseña nueva y vuelve a entrar. Su portafolio sigue intacto |
+| 3. Copia de rescate (opcional) | Si el usuario la activó (al registrarse o en *Mis datos*), hay una copia de su llave privada cifrada con la llave pública de emergencia |
+| 4. Romper el vidrio | El administrador sube en *Mis datos* el archivo de la llave privada de emergencia, su frase y su propia contraseña. La app abre la copia de rescate y la vuelve a cerrar con una llave temporal que solo abre la contraseña nueva del usuario. El administrador no ve la llave, la contraseña ni los datos, y la llave de emergencia no se guarda |
+| 5. Terminar | La próxima vez que el usuario escribe su contraseña para ver sus datos, su llave privada original queda protegida con la contraseña nueva |
+| Sin copia de rescate | Los datos cifrados con la contraseña olvidada no se pueden abrir: se borran y el usuario los vuelve a escribir |
+
+Cada recuperación queda registrada y el titular la ve en *Mis datos*. La llave de emergencia se crea una sola vez en el
+equipo del administrador y se guarda fuera del proyecto (los `*.pem` están en `.gitignore`):
+
+```powershell
+python crear_llave_emergencia.py --salida "D:\llave_emergencia.pem"
+```
+
+El script pide una frase y muestra la llave pública para pegarla en los *Secrets*. El correo sale de la cuenta del
+proyecto con SMTP (`correo_saliente.py`); con Gmail hay que activar la verificación en dos pasos y crear una
+*contraseña de aplicación*. En el equipo local, con la base SQLite y sin correo configurado, el código aparece en la
+terminal donde corre Streamlit.
+
+### Pestaña Ética (`interfaz_etica.py`)
+
+Muestra un diagrama de la arquitectura con los principios que entran en cada parte y los 49 controles de la app
+agrupados por principio (beneficencia, no maleficencia, autonomía, justicia y transparencia), con la pestaña donde se ve
+cada uno, y las normas que enmarcan el proyecto.
+
 **Base de datos (`base_datos.py`).** En el equipo local se usa SQLite (`base_datos/usuarios.db`, fuera del
 repositorio). En Streamlit Community Cloud el disco se borra con cada reinicio, así que allá se usa una base Postgres
 gratuita (por ejemplo, de [Neon](https://neon.com)): basta con agregar estas líneas en los *Secrets* de la app. Las
@@ -258,6 +311,13 @@ tablas nuevas se crean solas al arrancar.
 DATABASE_URL = "postgresql://usuario:contraseña@servidor/basededatos?sslmode=require"
 CLAVE_DATOS = "una frase larga y aleatoria"
 CORREO_ADMIN = "correo-de-la-cuenta-administradora@ejemplo.com"
+SMTP_USUARIO = "correo-del-proyecto@gmail.com"
+SMTP_CLAVE = "contraseña de aplicación de Gmail"
+LLAVE_EMERGENCIA_PUBLICA = """
+-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----
+"""
 ```
 
 `CLAVE_DATOS` genera la llave del índice HMAC de los correos; si se cambia o se pierde, nadie podría iniciar sesión,

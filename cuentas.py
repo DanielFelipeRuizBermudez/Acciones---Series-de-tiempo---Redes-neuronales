@@ -7,6 +7,8 @@
 - Se guarda la fecha y hora de la autorización y la versión de la política aceptada, como prueba.
 - El correo, el nombre, la dirección, la ciudad, el teléfono y la fecha de nacimiento van en un sobre cifrado con la
   llave pública del usuario. Solo su contraseña abre la llave privada que lo descifra (llaves.py).
+- Si el usuario lo elige, se guarda una copia de rescate de su llave privada cifrada con la llave pública de
+  emergencia, para recuperar sus datos si olvida la contraseña (recuperacion.py).
 """
 
 import math
@@ -46,6 +48,10 @@ class CuentaBloqueada(ErrorCuenta):
 
 def _hash(contrasena):
     return bcrypt.hashpw(contrasena.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+
+
+def hash_contrasena(contrasena):
+    return _hash(contrasena)
 
 
 def _coincide(contrasena, hash_guardado):
@@ -171,8 +177,11 @@ def necesita_completar(bd, token):
 
 # ------------------------------------------------------------------ registro e inicio de sesión
 
-def registrar(bd, alias, contrasena, confirmacion, personales, autoriza, historial_agente=False):
-    """Crea la cuenta, su par de llaves, su sobre de datos personales y su portafolio. Devuelve {'token', 'alias'}."""
+def registrar(bd, alias, contrasena, confirmacion, personales, autoriza, historial_agente=False, rescate_publica=None):
+    """Crea la cuenta, su par de llaves, su sobre de datos personales y su portafolio. Devuelve {'token', 'alias'}.
+
+    Con `rescate_publica` (la llave pública de emergencia) guarda también la copia de rescate de la llave privada.
+    """
     personales = normalizar_personales(personales)
     errores = errores_alias(alias) + errores_personales(personales) + errores_contrasena(contrasena, confirmacion)
     if not autoriza:
@@ -184,7 +193,7 @@ def registrar(bd, alias, contrasena, confirmacion, personales, autoriza, histori
     ahora = a_texto(ahora_utc())
     indice = bd.indice_correo(personales["correo"])
     hash_contrasena = _hash(contrasena)
-    par = llaves.generar_par(contrasena)
+    par, privada = llaves.nuevo_par(contrasena)
     with bd.transaccion() as cursor:
         if cursor.ejecutar("SELECT 1 AS existe FROM correos WHERE indice = ?", (indice,)).uno():
             raise ErrorCuenta("Ya existe una cuenta con ese correo.")
@@ -197,6 +206,9 @@ def registrar(bd, alias, contrasena, confirmacion, personales, autoriza, histori
         cursor.ejecutar("INSERT INTO correos (token, indice, cifrado) VALUES (?, ?, ?)", (token, indice, ""))
         _guardar_llaves(cursor, token, par, ahora)
         _guardar_sobre(cursor, token, par["publica"], personales, ahora, nuevo=True)
+        if rescate_publica:
+            import recuperacion
+            recuperacion.guardar_rescate(cursor, token, privada, rescate_publica, ahora)
         cursor.ejecutar("INSERT INTO portafolios (token, efectivo, saldo_inicial, inicio_en) VALUES (?, ?, ?, ?)",
                         (token, config.SALDO_INICIAL, config.SALDO_INICIAL, ahora))
     return {"token": token, "alias": alias.strip()}
@@ -276,13 +288,21 @@ def abrir_llave_privada(bd, token, contrasena):
     try:
         return llaves.abrir_privada(guardada, contrasena)
     except llaves.LlaveNoAbre as error:
+        import recuperacion
+        privada = recuperacion.terminar(bd, token, contrasena)
+        if privada is not None:
+            return privada
+        if recuperacion.en_curso(bd, token):
+            raise ErrorCuenta("Tus datos personales están en recuperación: el administrador todavía no ha usado la "
+                              "llave de emergencia.") from error
         raise ErrorCuenta("La llave privada no se pudo abrir con esa contraseña.") from error
 
 
 # ------------------------------------------------------------------ datos personales
 
-def completar_datos(bd, token, contrasena, personales, autoriza):
-    """Cuentas creadas antes de los datos cifrados: genera las llaves, guarda el sobre y borra la copia Fernet."""
+def completar_datos(bd, token, contrasena, personales, autoriza, rescate_publica=None):
+    """Cuentas sin llaves (creadas antes de los datos cifrados, o recuperadas sin llave de emergencia): genera las
+    llaves, guarda el sobre, la copia de rescate si se pidió, y borra la copia Fernet del correo."""
     personales = normalizar_personales(personales)
     errores = errores_personales(personales)
     if not autoriza:
@@ -290,7 +310,7 @@ def completar_datos(bd, token, contrasena, personales, autoriza):
     if errores:
         raise ErrorCuenta(" ".join(errores))
     comprobar_contrasena(bd, token, contrasena)
-    par = llaves.generar_par(contrasena)
+    par, privada = llaves.nuevo_par(contrasena)
     ahora = a_texto(ahora_utc())
     with bd.transaccion() as cursor:
         fila = cursor.ejecutar("SELECT indice FROM correos WHERE token = ?" + bd.bloqueo, (token,)).uno()
@@ -300,6 +320,9 @@ def completar_datos(bd, token, contrasena, personales, autoriza):
             raise ErrorCuenta("Los datos de esta cuenta ya están completos.")
         _guardar_llaves(cursor, token, par, ahora)
         _guardar_sobre(cursor, token, par["publica"], personales, ahora, nuevo=True)
+        if rescate_publica:
+            import recuperacion
+            recuperacion.guardar_rescate(cursor, token, privada, rescate_publica, ahora)
         cursor.ejecutar("UPDATE correos SET cifrado = ? WHERE token = ?", ("", token))
         cursor.ejecutar("UPDATE usuarios SET mayor_de_edad = ?, autorizacion_en = ?, version_politica = ? "
                         "WHERE token = ?", (True, ahora, config.VERSION_POLITICA, token))
@@ -374,6 +397,10 @@ def datos_del_titular(bd, token):
         accesos = cursor.ejecutar(
             "SELECT a.solicitud_id, a.visto_en FROM accesos_datos a JOIN solicitudes_acceso s "
             "ON s.id = a.solicitud_id WHERE s.titular = ? ORDER BY a.id", (token,)).todos()
+        rescate = cursor.ejecutar("SELECT huella_emergencia, creada_en FROM llaves_rescate WHERE token = ?",
+                                  (token,)).uno()
+        recuperaciones = cursor.ejecutar("SELECT estado, creada_en, vidrio_roto_en, completada_en FROM recuperaciones "
+                                         "WHERE token = ? ORDER BY id", (token,)).todos()
     usuario["mayor_de_edad"] = bool(usuario["mayor_de_edad"])
     usuario["historial_agente"] = bool(usuario["historial_agente"])
     return {
@@ -388,6 +415,9 @@ def datos_del_titular(bd, token):
         "historial_del_agente": conversaciones,
         "solicitudes_de_acceso": solicitudes,
         "accesos_a_datos_compartidos": accesos,
+        "copia_de_rescate": ({"huella_llave_emergencia": rescate["huella_emergencia"],
+                              "creada_en": rescate["creada_en"]} if rescate else None),
+        "recuperaciones_de_la_cuenta": recuperaciones,
     }
 
 
@@ -410,10 +440,7 @@ def cambiar_contrasena(bd, token, actual, nueva, confirmacion):
         guardada = leer_llaves(cursor, token)
     protegida = None
     if guardada is not None:
-        try:
-            protegida = llaves.proteger_privada(llaves.abrir_privada(guardada, actual), nueva)
-        except llaves.LlaveNoAbre as error:
-            raise ErrorCuenta("La llave privada no se pudo abrir con la contraseña actual.") from error
+        protegida = llaves.proteger_privada(abrir_llave_privada(bd, token, actual), nueva)
     with bd.transaccion() as cursor:
         cursor.ejecutar("UPDATE usuarios SET hash_contrasena = ? WHERE token = ?", (_hash(nueva), token))
         if protegida is not None:
@@ -433,13 +460,26 @@ def cambiar_historial_agente(bd, token, activo):
         cursor.ejecutar("UPDATE usuarios SET historial_agente = ? WHERE token = ?", (bool(activo), token))
 
 
+def version_aceptada(bd, token):
+    with bd.transaccion() as cursor:
+        fila = cursor.ejecutar("SELECT version_politica FROM usuarios WHERE token = ?", (token,)).uno()
+    return fila["version_politica"] if fila else None
+
+
+def aceptar_politica(bd, token):
+    """El titular acepta la versión vigente de la política; se guarda la fecha como prueba."""
+    with bd.transaccion() as cursor:
+        cursor.ejecutar("UPDATE usuarios SET autorizacion_en = ?, version_politica = ? WHERE token = ?",
+                        (a_texto(ahora_utc()), config.VERSION_POLITICA, token))
+
+
 def eliminar_cuenta(bd, token):
-    """Revoca la autorización: borra la cuenta, sus llaves, sus datos personales, sus solicitudes, el portafolio, las
-    operaciones y el uso del agente."""
+    """Revoca la autorización: borra la cuenta, sus llaves y su copia de rescate, sus datos personales, sus solicitudes
+    y recuperaciones, el portafolio, las operaciones y el uso del agente."""
     with bd.transaccion() as cursor:
         cursor.ejecutar("DELETE FROM accesos_datos WHERE solicitud_id IN (SELECT id FROM solicitudes_acceso "
                         "WHERE titular = ? OR solicitante = ?)", (token, token))
         cursor.ejecutar("DELETE FROM solicitudes_acceso WHERE titular = ? OR solicitante = ?", (token, token))
-        for tabla in ("datos_personales", "llaves", "conversaciones", "uso_agente", "operaciones", "portafolios",
-                      "correos", "usuarios"):
+        for tabla in ("codigos_recuperacion", "recuperaciones", "llaves_rescate", "datos_personales", "llaves",
+                      "conversaciones", "uso_agente", "operaciones", "portafolios", "correos", "usuarios"):
             cursor.ejecutar(f"DELETE FROM {tabla} WHERE token = ?", (token,))

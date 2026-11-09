@@ -9,9 +9,12 @@ import streamlit as st
 
 import base_datos
 import config
+import correo_saliente
 import cuentas
 import datos
+import llaves
 import portafolio
+import recuperacion
 import registro_agente
 import solicitudes
 
@@ -25,7 +28,9 @@ AVISO_PRIVACIDAD = (
     "Tu alias y tu contraseña (guardada solo como hash) sirven para crear y proteger tu cuenta y llevar tu portafolio "
     "simulado con dinero ficticio. Tu nombre, correo, teléfono, dirección, ciudad y fecha de nacimiento se cifran con "
     "una llave que solo abre tu contraseña: nadie más los puede leer, y si el administrador necesita contactarte, te "
-    "pide permiso y tú decides qué datos compartes y por cuánto tiempo. La fecha de nacimiento sirve para comprobar "
+    "pide permiso y tú decides qué datos compartes y por cuánto tiempo. Si olvidas tu contraseña, recuperas la cuenta "
+    "con un código que llega a tu correo; tus datos personales solo se recuperan si activas la copia de rescate con la "
+    "llave de emergencia. La fecha de nacimiento sirve para comprobar "
     "que eres mayor de edad. Antes de enviarse a Google Gemini, las preguntas al agente se anonimizan. Tus datos no se "
     "venden ni se usan para publicidad. Puedes conocer, actualizar, rectificar y suprimir tus datos, o revocar esta "
     "autorización, desde la pestaña Mis datos o escribiendo a {correo}. La política completa está en el enlace de "
@@ -139,6 +144,49 @@ def correo_admin():
     return _secreto("CORREO_ADMIN")
 
 
+def llave_emergencia_publica():
+    """Llave pública de emergencia (PEM) de los Secrets, o None si la recuperación de datos no está configurada."""
+    return _secreto("LLAVE_EMERGENCIA_PUBLICA")
+
+
+def _envio_local():
+    return not (_secreto("SMTP_USUARIO") and _secreto("SMTP_CLAVE")) and not _secreto("DATABASE_URL")
+
+
+def _enviador_codigos():
+    """Función que envía el código de recuperación, o None si el envío no está configurado.
+
+    En el equipo local, con la base SQLite y sin correo configurado, el código se escribe en la terminal.
+    """
+    usuario, clave = _secreto("SMTP_USUARIO"), _secreto("SMTP_CLAVE")
+    if usuario and clave:
+        servidor = _secreto("SMTP_SERVIDOR") or correo_saliente.SERVIDOR_POR_DEFECTO
+        puerto = _secreto("SMTP_PUERTO") or correo_saliente.PUERTO_POR_DEFECTO
+
+        def enviar(destino, codigo):
+            correo_saliente.enviar_codigo(destino, codigo, recuperacion.MINUTOS_CODIGO, usuario, clave, servidor,
+                                          puerto)
+        return enviar
+    if _envio_local():
+        return lambda destino, codigo: print(f"[base local] Código de recuperación para {destino}: {codigo}",
+                                             flush=True)
+    return None
+
+
+def _casilla_rescate(clave):
+    """Casilla opcional de la copia de rescate (dentro de un st.form). Devuelve la llave pública o None."""
+    publica = llave_emergencia_publica()
+    if not publica:
+        return None
+    activar = st.checkbox(
+        "Guardar una copia de rescate de mi llave, para recuperar mis datos personales si olvido mi contraseña "
+        "(opcional).", value=False, key=clave,
+        help="La copia se cifra con la llave de emergencia, que el administrador guarda fuera de la aplicación. Solo "
+             "se usa si pides recuperar tu cuenta con el código de tu correo, y queda registrado. Sin la copia, si "
+             "olvidas tu contraseña recuperas la cuenta, pero no tus datos personales. Puedes quitarla en Mis datos.")
+    return publica if activar else None
+
+
 def _sin_formato(texto):
     """Texto escrito por otra persona, mostrado sin que su Markdown cambie la página."""
     return "".join("\\" + c if c in "\\`*_{}[]()#+-.!|<>~" else c for c in str(texto))
@@ -163,6 +211,9 @@ def barra_lateral(usuario):
             if n:
                 st.sidebar.warning(f"Tienes {n} {'solicitud' if n == 1 else 'solicitudes'} de acceso a tus datos "
                                    "personales. Revísalas en la pestaña Mis datos.")
+            if cuentas.version_aceptada(bd, usuario["token"]) not in (None, config.VERSION_POLITICA):
+                st.sidebar.info(f"La política de datos cambió (versión del {config.VERSION_POLITICA}). Revísala y "
+                                "acéptala en la pestaña Mis datos.")
         if st.sidebar.button("Cerrar sesión"):
             _cerrar_sesion()
             st.rerun()
@@ -180,8 +231,11 @@ def _formularios(bd):
     st.markdown(f"Con una cuenta puedes comprar y vender acciones con **{config.SALDO_INICIAL:,.0f} USD ficticios**, "
                 "ver cuánto habrías ganado o perdido y compararlo con comprar y mantener. Es un juego académico: "
                 "nada de lo que se muestra es una recomendación de inversión.")
-    modo = st.radio("Cuenta", ["Iniciar sesión", "Crear cuenta"], horizontal=True, label_visibility="collapsed",
-                    key="modo_cuenta")
+    modo = st.radio("Cuenta", ["Iniciar sesión", "Crear cuenta", "Olvidé mi contraseña"], horizontal=True,
+                    label_visibility="collapsed", key="modo_cuenta")
+    if modo == "Olvidé mi contraseña":
+        _formulario_recuperar(bd)
+        return
     if modo == "Iniciar sesión":
         with st.form("form_entrar"):
             correo = st.text_input("Correo")
@@ -202,7 +256,8 @@ def _formularios(bd):
         contrasena = columna_1.text_input("Contraseña", type="password",
                                           help=f"Al menos {config.CONTRASENA_MINIMA} caracteres, con letras y números. "
                                                "También protege la llave que cifra tus datos personales: si la "
-                                               "olvidas, esos datos no se pueden recuperar.")
+                                               "olvidas, recuperas la cuenta con un código a tu correo, pero tus datos "
+                                               "personales solo si activas la copia de rescate.")
         confirmacion = columna_2.text_input("Repite la contraseña", type="password")
         st.markdown("**Datos personales** (se cifran con tu llave; solo tú los puedes ver)")
         personales = _campos_personales("registro")
@@ -214,10 +269,12 @@ def _formularios(bd):
             "pueden estar fuera de Colombia.", value=False)
         historial = st.checkbox("Quiero guardar el historial de mis preguntas al agente (puedo cambiarlo en cualquier "
                                 "momento).", value=False)
+        rescate = _casilla_rescate("registro_rescate")
         if st.form_submit_button("Crear cuenta", type="primary"):
             try:
                 with st.spinner("Creando tu cuenta y tu par de llaves…"):
-                    usuario = cuentas.registrar(bd, alias, contrasena, confirmacion, personales, autoriza, historial)
+                    usuario = cuentas.registrar(bd, alias, contrasena, confirmacion, personales, autoriza, historial,
+                                                rescate_publica=rescate)
             except cuentas.ErrorCuenta as error:
                 st.error(str(error))
             else:
@@ -252,8 +309,54 @@ def _campos_personales(clave, actuales=None, con_correo=True):
     return personales
 
 
+def _formulario_recuperar(bd):
+    st.markdown(f"Recupera tu cuenta en dos pasos: te enviamos un código de {recuperacion.DIGITOS_CODIGO} dígitos al "
+                "correo con el que te registraste y con él eliges una contraseña nueva. Nadie puede ver tu contraseña "
+                "anterior: solo se guarda su hash.")
+    with st.form("form_pedir_codigo"):
+        st.markdown("**1. Pedir el código**")
+        correo = st.text_input("Correo con el que te registraste", key="recuperar_correo")
+        if st.form_submit_button("Enviarme el código"):
+            try:
+                with st.spinner("Enviando el código…"):
+                    recuperacion.pedir_codigo(bd, correo, _enviador_codigos())
+            except recuperacion.ErrorRecuperacion as error:
+                st.error(str(error))
+            except Exception as error:
+                st.error(f"No se pudo enviar el correo ({type(error).__name__}). Intenta de nuevo más tarde.")
+            else:
+                st.success(recuperacion.MENSAJE_CODIGO_ENVIADO)
+                if _envio_local():
+                    st.caption("Base local sin correo configurado: el código aparece en la terminal donde corre "
+                               "Streamlit.")
+    with st.form("form_restablecer", clear_on_submit=True):
+        st.markdown("**2. Elegir la contraseña nueva**")
+        correo_codigo = st.text_input("Correo", key="restablecer_correo")
+        codigo = st.text_input(f"Código de {recuperacion.DIGITOS_CODIGO} dígitos",
+                               max_chars=recuperacion.DIGITOS_CODIGO, key="restablecer_codigo")
+        columna_1, columna_2 = st.columns(2)
+        nueva = columna_1.text_input("Contraseña nueva", type="password", key="restablecer_nueva")
+        repetida = columna_2.text_input("Repite la contraseña nueva", type="password", key="restablecer_repetida")
+        if st.form_submit_button("Cambiar la contraseña", type="primary"):
+            try:
+                with st.spinner("Comprobando el código…"):
+                    resultado = recuperacion.restablecer(bd, correo_codigo, codigo, nueva, repetida)
+            except recuperacion.ErrorRecuperacion as error:
+                st.error(str(error))
+            else:
+                if resultado == "pendiente":
+                    st.success("Contraseña cambiada: ya puedes iniciar sesión. Tus datos personales siguen cifrados; "
+                               "se abren con tu contraseña nueva cuando el administrador use la llave de emergencia. "
+                               "El estado aparece en Mis datos.")
+                else:
+                    st.success("Contraseña cambiada: ya puedes iniciar sesión. Como no tenías la copia de rescate, "
+                               "tus datos personales anteriores no se podían abrir y se borraron; al entrar te pedimos "
+                               "escribirlos de nuevo. Tu portafolio y tus operaciones siguen intactos.")
+
+
 def _formulario_completar(bd, usuario, lugar):
-    """Cuentas creadas antes de los datos personales cifrados. `lugar` distingue el formulario de cada pestaña."""
+    """Cuentas sin llaves: creadas antes de los datos personales cifrados, o recuperadas sin llave de emergencia.
+    `lugar` distingue el formulario de cada pestaña."""
     st.warning("Para seguir usando tu cuenta, completa tus datos personales. Se cifran con una llave nueva que solo "
                "abre tu contraseña, y el correo deja de tener una copia que la aplicación pueda leer.")
     with st.form(f"form_completar_{lugar}"):
@@ -266,10 +369,12 @@ def _formulario_completar(bd, usuario, lugar):
         autoriza = st.checkbox(f"Autorizo el tratamiento de mis datos personales según la política del "
                                f"{config.VERSION_POLITICA}, incluido su almacenamiento en servidores que pueden estar "
                                "fuera de Colombia.", value=False, key=f"completar_{lugar}_autoriza")
+        rescate = _casilla_rescate(f"completar_{lugar}_rescate")
         if st.form_submit_button("Guardar mis datos", type="primary"):
             try:
                 with st.spinner("Creando tu par de llaves…"):
-                    cuentas.completar_datos(bd, usuario["token"], contrasena, personales, autoriza)
+                    cuentas.completar_datos(bd, usuario["token"], contrasena, personales, autoriza,
+                                            rescate_publica=rescate)
             except cuentas.ErrorCuenta as error:
                 _bloqueada(error)
             else:
@@ -597,6 +702,65 @@ def _seccion_solicitudes(bd, token):
                "plazo, o si revocas el permiso, la copia compartida se borra.")
 
 
+def _aviso_cambio_politica(bd, token, version_aceptada):
+    with st.container(border=True):
+        st.markdown(f"**La política de tratamiento de datos cambió** (versión del {config.VERSION_POLITICA}; aceptaste la "
+                    f"del {version_aceptada}). Novedades: recuperar la cuenta con un código que llega a tu correo, "
+                    "enviado con Gmail, y una copia de rescate opcional de tu llave con la llave de emergencia, para "
+                    "recuperar tus datos personales si olvidas tu contraseña.")
+        mostrar_politica("Leer la política vigente")
+        if st.button(f"Acepto la política del {config.VERSION_POLITICA}", key="aceptar_politica"):
+            cuentas.aceptar_politica(bd, token)
+            st.rerun()
+
+
+def _seccion_recuperacion(bd, token, titular, completa):
+    st.markdown("#### Recuperación de la cuenta")
+    st.caption("Si olvidas tu contraseña, en la pestaña Portafolio simulado eliges «Olvidé mi contraseña»: te llega un "
+               "código a tu correo y con él eliges una contraseña nueva. Tus datos personales solo se recuperan si "
+               "tienes activada la copia de rescate de tu llave.")
+    if recuperacion.en_curso(bd, token):
+        st.info("Tienes una recuperación en curso. Tus datos personales se abren con tu contraseña nueva cuando el "
+                "administrador use la llave de emergencia; si ya la usó, se completa la próxima vez que escribas tu "
+                "contraseña para ver tus datos.")
+    copia = titular["copia_de_rescate"]
+    publica = llave_emergencia_publica()
+    if copia:
+        st.markdown(f"Copia de rescate **activada** desde {_hora(copia['creada_en'])}, cifrada con la llave de "
+                    f"emergencia de huella `{copia['huella_llave_emergencia']}`.")
+        if st.button("Quitar la copia de rescate", key="quitar_rescate"):
+            recuperacion.desactivar_rescate(bd, token)
+            st.rerun()
+    elif completa and publica:
+        st.markdown("Copia de rescate **desactivada**: si olvidas tu contraseña, recuperas la cuenta, pero no tus datos "
+                    "personales.")
+        with st.form("form_activar_rescate", clear_on_submit=True):
+            contrasena = st.text_input("Tu contraseña (abre tu llave privada para crear la copia)", type="password",
+                                       key="activar_rescate_contrasena")
+            if st.form_submit_button("Activar la copia de rescate"):
+                try:
+                    with st.spinner("Cifrando la copia con la llave de emergencia…"):
+                        recuperacion.activar_rescate(bd, token, contrasena, publica)
+                except cuentas.ErrorCuenta as error:
+                    _bloqueada(error)
+                except recuperacion.ErrorRecuperacion as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+        st.caption(f"Huella de la llave de emergencia de esta aplicación: `{llaves.huella(publica)}`. La copia solo se "
+                   "abre si pides recuperar tu cuenta con el código de tu correo, y queda registrado aquí.")
+    elif not publica:
+        st.caption("La recuperación de datos con llave de emergencia no está configurada en esta aplicación.")
+    historial = titular["recuperaciones_de_la_cuenta"]
+    if historial:
+        st.dataframe(pd.DataFrame({
+            "pedida": [_hora(r["creada_en"]) for r in historial],
+            "estado": [recuperacion.ESTADOS[r["estado"]] for r in historial],
+            "llave de emergencia usada": [_hora(r["vidrio_roto_en"]) for r in historial],
+            "terminada": [_hora(r["completada_en"]) for r in historial],
+        }), hide_index=True)
+
+
 def pestana_mis_datos(usuario):
     bd, error = base()
     if error:
@@ -615,6 +779,8 @@ def pestana_mis_datos(usuario):
     completa = titular["llave"] is not None
     if not completa:
         _formulario_completar(bd, usuario, "mis_datos")
+    elif datos_usuario["version_politica"] != config.VERSION_POLITICA:
+        _aviso_cambio_politica(bd, token, datos_usuario["version_politica"])
 
     st.markdown("Estos son **todos** los datos que la aplicación guarda sobre ti. Puedes consultarlos, descargarlos, "
                 "corregirlos o eliminarlos (Ley 1581 de 2012, artículo 8).")
@@ -636,6 +802,8 @@ def pestana_mis_datos(usuario):
         ("Preguntas al agente hoy", f"{registro_agente.consultas_hoy(bd, token)} de {config.AGENTE_CONSULTAS_DIARIAS}"),
         ("Mensajes guardados del agente", str(len(titular["historial_del_agente"]))),
         ("Solicitudes de acceso a tus datos", str(len(titular["solicitudes_de_acceso"]))),
+        ("Copia de rescate de tu llave", "Activada" if titular["copia_de_rescate"] else "Desactivada"),
+        ("Recuperaciones de la cuenta", str(len(titular["recuperaciones_de_la_cuenta"]))),
     ], columns=["dato", "valor"]), hide_index=True)
     st.download_button("Descargar el resto de mis datos (JSON)",
                        json.dumps(titular, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
@@ -644,9 +812,10 @@ def pestana_mis_datos(usuario):
     if completa:
         _seccion_datos_personales(bd, token)
         _seccion_solicitudes(bd, token)
-        if solicitudes.es_admin(bd, token, correo_admin()):
-            import interfaz_admin
-            interfaz_admin.panel(bd, usuario)
+    _seccion_recuperacion(bd, token, titular, completa)
+    if completa and solicitudes.es_admin(bd, token, correo_admin()):
+        import interfaz_admin
+        interfaz_admin.panel(bd, usuario)
 
     st.markdown("#### Alias y contraseña")
     with st.form("form_alias"):

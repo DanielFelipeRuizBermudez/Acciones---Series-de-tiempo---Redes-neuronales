@@ -1,8 +1,11 @@
-"""Panel del administrador: pedir acceso a los datos personales de un usuario y verlos solo si él lo autoriza.
+"""Panel del administrador: pedir acceso a los datos personales de un usuario y verlos solo si él lo autoriza, y romper
+el vidrio cuando un usuario recupera su cuenta.
 
 El administrador es la cuenta cuyo correo está en CORREO_ADMIN (Secrets de Streamlit). No tiene ningún permiso para
 leer datos: solo puede pedir. Lo que el titular comparte llega cifrado con la llave pública del administrador y se
-abre con la contraseña del administrador mientras la autorización esté vigente.
+abre con la contraseña del administrador mientras la autorización esté vigente. Para una recuperación, el
+administrador sube la llave de emergencia solo en ese momento; la aplicación vuelve a cerrar la llave del usuario
+para su contraseña nueva sin mostrarle nada.
 """
 
 import pandas as pd
@@ -10,6 +13,7 @@ import streamlit as st
 
 import cuentas
 import interfaz_cuenta as ui
+import recuperacion
 import solicitudes
 
 
@@ -71,8 +75,41 @@ def _vigentes(bd, token, filas):
                     st.rerun()
 
 
+def _recuperaciones(bd, token):
+    st.markdown("#### Administración: recuperaciones con la llave de emergencia")
+    filas = recuperacion.pendientes(bd)
+    if not filas:
+        st.caption("No hay recuperaciones esperando la llave de emergencia.")
+        return
+    st.caption("Romper el vidrio: el usuario ya demostró con el código de su correo que es el dueño de la cuenta y eligió "
+               "una contraseña nueva. Sube el archivo de la llave de emergencia y escribe su frase: la aplicación vuelve "
+               "a cerrar la llave privada del usuario para su contraseña nueva. No ves la llave del usuario, ni su "
+               "contraseña, ni sus datos, y la llave de emergencia no se guarda. Queda registrado y el usuario lo ve.")
+    opciones = {f["id"]: f"{f['alias']} · pedida el {ui._hora(f['creada_en'])} · llave {f['huella_emergencia'][:19]}"
+                for f in filas}
+    with st.form("form_romper_vidrio", clear_on_submit=True):
+        elegida = st.selectbox("Recuperación", list(opciones), format_func=opciones.get)
+        archivo = st.file_uploader("Archivo de la llave de emergencia (.pem)", type=["pem"])
+        frase = st.text_input("Frase de la llave de emergencia", type="password")
+        contrasena = st.text_input("Tu contraseña de administrador", type="password")
+        if st.form_submit_button("Romper el vidrio", type="primary"):
+            try:
+                cuentas.comprobar_contrasena(bd, token, contrasena)
+                if archivo is None:
+                    raise recuperacion.ErrorRecuperacion("Sube el archivo de la llave de emergencia.")
+                with st.spinner("Cerrando la llave del usuario para su contraseña nueva…"):
+                    recuperacion.romper_vidrio(bd, elegida, archivo.getvalue(), frase)
+            except cuentas.ErrorCuenta as error:
+                ui._bloqueada(error)
+            except recuperacion.ErrorRecuperacion as error:
+                st.error(str(error))
+            else:
+                st.success("Listo: el usuario recupera sus datos la próxima vez que escriba su contraseña.")
+
+
 def panel(bd, usuario):
     token = usuario["token"]
+    _recuperaciones(bd, token)
     st.markdown("#### Administración: acceso a datos personales")
     st.caption("Como administrador no puedes leer los datos de nadie por tu cuenta. Pides acceso con un motivo; el "
                "titular decide qué datos comparte y por cuánto tiempo; la copia llega cifrada con tu llave pública y "

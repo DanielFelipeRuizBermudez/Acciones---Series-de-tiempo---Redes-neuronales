@@ -116,9 +116,10 @@ def main():
                     else (config.ARIMA_MAX_P, config.ARIMA_MAX_Q))
 
     def informar_arima(numero, total, fila):
-        nota = "" if fila["valido"] else " (descartado: no converge o no es estacionario e invertible)"
+        marcas_req = "".join("S" if fila[clave] else "-" for clave in modelos_series.REQUISITOS_ARIMA)
+        nota = "" if fila["convergio"] else " (no convergió)"
         print(f"  {numero:>2}/{total} ARIMA({fila['p']},1,{fila['q']}) -> AIC={fila['aic']:.1f} "
-              f"BIC={fila['bic']:.1f}{nota}")
+              f"requisitos {fila['requisitos']}/5 [{marcas_req}]{nota}")
 
     arima, tabla_arima, residuos_arima = modelos_series.buscar_arima(f, cortes, p_max, q_max, informar_arima)
     arima["integracion"] = pasos_adf
@@ -129,9 +130,16 @@ def main():
     tabla_arima.to_csv(salida / "busqueda_arima.csv", index=False)
     pd.DataFrame({"marca": marcas[: len(residuos_arima)], "residuo_pct": residuos_arima}).to_csv(
         salida / "residuos_arima.csv", index=False)
+    print("  [S/-] = estacionario, invertible, coeficientes significativos, residuos sin autocorrelación, "
+          "residuos normales")
+    for coeficiente in arima["coeficientes"]:
+        print(f"  {coeficiente['parametro']:>6} = {coeficiente['estimacion']:+.4f} (error estándar robusto "
+              f"{coeficiente['error_estandar']:.4f}, p-valor {coeficiente['p_valor']:.4f})")
     for prueba in arima["diagnostico"]["ljung_box"]:
         print(f"  Ljung-Box de los residuos ({prueba['rezagos']} rezagos): p-valor {prueba['p_valor']:.4f}")
-    print(f"  elegido por AIC: {arima['nombre']}")
+    print(f"  Jarque-Bera de los residuos: p-valor {arima['diagnostico']['jarque_bera']['p_valor']:.4f}")
+    print(f"  elegido: {arima['nombre']}, cumple {arima['requisitos_cumplidos']} de 5 requisitos "
+          "(desempate por AIC)")
 
     if not args.sin_prophet:
         print("\n[3/6] Prophet sobre log(precio)")

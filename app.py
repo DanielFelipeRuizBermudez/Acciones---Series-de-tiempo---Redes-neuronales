@@ -15,6 +15,8 @@ import datos
 import estrategias
 import interfaz_agente
 import interfaz_cuenta
+import interfaz_etica
+import modelos_redes
 import modelos_series
 import portafolio as portafolio_simulado
 import prediccion
@@ -281,9 +283,9 @@ if error_hora:
 ultima_iso = datos.velas_completas(df_hora, INTERVALO).index[-1].isoformat()
 
 (tab_vivo, tab_horas, tab_estrategias, tab_portafolio, tab_agente, tab_prophet, tab_serie, tab_eval, tab_datos,
- tab_mis_datos) = st.tabs(
+ tab_mis_datos, tab_etica) = st.tabs(
     ["En vivo y próxima hora", "Varias horas", "Estrategias", "Portafolio simulado", "Agente", "Prophet",
-     "Análisis de la serie", "Evaluación de modelos", "Datos recolectados", "Mis datos"]
+     "Análisis de la serie", "Evaluación de modelos", "Datos recolectados", "Mis datos", "Ética"]
 )
 
 
@@ -428,15 +430,56 @@ def hora_corta(marca):
     return f"{DIAS[ny.weekday()]} {ny:%d/%m %H:%M}"
 
 
+def rezagos_modelo(nombre, arts):
+    """Cuántos log-retornos pasados usa cada modelo recursivo para predecir la hora siguiente."""
+    resumen = arts["resumen"]
+    if nombre.startswith("ARIMA("):
+        return resumen["arima"]["p"]
+    if nombre.startswith("AR("):
+        return resumen["ar"]["p"]
+    for tipo, nombre_tipo in modelos_redes.TIPOS.items():
+        if nombre == nombre_tipo:
+            return resumen["redes"][tipo]["ventana"]
+    return 0
+
+
+def tabla_paso_a_paso(nombre, futuro, cierre_origen, historia_r, arts):
+    """Cada hora futura con la ventana que entró al modelo, el log-retorno predicho y el precio resultante."""
+    k = rezagos_modelo(nombre, arts)
+    precios = futuro[nombre].to_numpy(dtype=float)
+    predichos = np.diff(np.log(np.r_[cierre_origen, precios]))
+    secuencia = list(historia_r) + list(predichos)
+    n_real = len(historia_r)
+    filas = []
+    for h in range(len(predichos)):
+        fin = n_real + h
+        indices = list(range(fin - 1, max(fin - k, 0) - 1, -1)) if k else []
+        entrada = ", ".join(f"[{100 * secuencia[i]:.3f}]" if i >= n_real else f"{100 * secuencia[i]:.3f}"
+                            for i in indices)
+        filas.append({
+            "paso": h + 1,
+            "hora que predice": hora_corta(futuro.index[h]),
+            (f"entrada: últimos {k} log-retornos (%)" if k else "entrada"): entrada or "ninguno: solo la media μ",
+            "log-retorno predicho (%)": round(100 * float(predichos[h]), 4),
+            "precio predicho": round(float(precios[h]), 2),
+        })
+    return pd.DataFrame(filas)
+
+
 with tab_horas:
     st.markdown(
-        "Pronóstico de varias horas de mercado hacia adelante con el modelo ganador de cada tipo. "
-        "AR, ARIMA, RNN y LSTM predicen una hora, toman esa predicción como si fuera un dato real y siguen con la "
-        "siguiente (**pronóstico recursivo**); Prophet evalúa su curva directamente en cada hora futura."
+        "Pronóstico **hora por hora** con el modelo ganador de cada tipo. AR, ARIMA, RNN y LSTM predicen la hora "
+        "siguiente con su ventana de log-retornos; después esa predicción entra a la ventana como si fuera un dato "
+        "real y se predice la hora que sigue, y así sucesivamente (**pronóstico recursivo**). El precio de cada hora "
+        "es el de la hora anterior multiplicado por e elevado al log-retorno predicho. Prophet no es recursivo: evalúa "
+        "su curva directamente en cada hora futura."
     )
+    st.latex(r"\hat r_{t+1} = f(r_t, r_{t-1}, \dots) \qquad \hat r_{t+2} = f(\hat r_{t+1}, r_t, \dots) \qquad "
+             r"\hat r_{t+3} = f(\hat r_{t+2}, \hat r_{t+1}, r_t, \dots) \qquad \hat P_{t+h} = \hat P_{t+h-1}\, e^{\hat r_{t+h}}")
     control_1, control_2 = st.columns([1, 2])
-    horas = control_1.slider("Horas de mercado hacia adelante", min_value=1, max_value=35, value=14,
-                             help="Una sesión tiene 7 velas de 1 hora: 14 ≈ 2 sesiones, 35 ≈ una semana.")
+    horas = control_1.slider("Horas de mercado hacia adelante", min_value=1, max_value=35, value=7,
+                             help="Cada paso es una vela de 1 hora. Una sesión tiene 7: 14 son 2 sesiones y 35, una "
+                                  "semana de mercado.")
     modo = control_2.radio("Pronosticar desde", ["La última vela (hacia el futuro)",
                                                  "Un momento pasado (para comparar con lo que pasó)"])
     completas_tab = completas_hasta(ticker, INTERVALO, ultima_iso)
@@ -472,8 +515,9 @@ with tab_horas:
                                  mode="lines+markers", name=nombre, marker=dict(size=5),
                                  line=dict(color=color_modelo(nombre), width=2, dash="dot")))
     fig.add_vline(x=x_origen, line_dash="dash", line_color=COLOR_REFERENCIA)
-    titulo_h = (f"Pronóstico de {horas} {'hora' if horas == 1 else 'horas'} desde {hora_doble(origen)}"
+    titulo_h = (f"Pronóstico hora por hora: {horas} {'hora' if horas == 1 else 'horas'} desde {hora_doble(origen)}"
                 + (" y lo que pasó en realidad" if not reales_h.empty else ""))
+    fig.update_xaxes(tickformat="%d/%m %H:%M")
     st.plotly_chart(estilo(fig, alto=460, titulo=titulo_h), key="grafico_varias_horas")
     st.caption(f"La franja gris es el rango donde caería el precio el 80% de las veces si se moviera al azar, con la "
                f"volatilidad de las últimas 500 horas ({100 * info_h['sigma']:.2f}% por hora): crece como √horas. "
@@ -499,6 +543,19 @@ with tab_horas:
     st.dataframe(pd.DataFrame(filas_h), hide_index=True)
     if not reales_h.empty and len(reales_h) < horas:
         st.caption(f"Solo hay {len(reales_h)} horas reales después del origen; la comparación usa esas.")
+
+    recursivos = [m for m in modelos_h if m != "Prophet"]
+    if recursivos and arts:
+        st.markdown("**Paso a paso del pronóstico recursivo**")
+        modelo_paso = st.selectbox("Modelo", recursivos, key="modelo_paso_a_paso")
+        historia_r = np.log(completas_tab.loc[completas_tab.index <= origen, "Close"].astype(float)).diff().dropna()
+        st.dataframe(tabla_paso_a_paso(modelo_paso, futuro, info_h["cierre_origen"], historia_r.to_numpy(), arts),
+                     hide_index=True)
+        nota_arima = (" El ARIMA usa además sus últimos residuos en la parte MA; los residuos de las horas futuras "
+                      "valen 0, porque todavía no se conocen." if modelo_paso.startswith("ARIMA(") else "")
+        st.caption("La entrada va de la hora más reciente a la más antigua. Los valores entre corchetes son "
+                   "predicciones del propio modelo que ya entraron a la ventana; los demás son log-retornos reales "
+                   f"hasta el origen.{nota_arima}")
 
     st.markdown("**¿Qué tan rápido pierde precisión cada modelo al alejarse?**")
     if st.checkbox("Calcular el error promedio por horizonte en las últimas 10 sesiones"):
@@ -743,6 +800,36 @@ def _con_signo(valor):
     return f"- {abs(valor):.4f}" if valor < 0 else f"+ {valor:.4f}"
 
 
+REQUISITOS_ARIMA_TEXTO = [
+    ("Estacionario", "Raíces del polinomio AR fuera del círculo unitario",
+     "El ARMA describe una serie estacionaria: con una raíz dentro o sobre el círculo, el efecto de un choque no se "
+     "desvanece y la varianza del pronóstico crece sin límite; además indicaría que faltaba diferenciar."),
+    ("Invertible", "Raíces del polinomio MA fuera del círculo unitario",
+     "El modelo se puede escribir como un AR infinito sobre el pasado observado: los residuos se recuperan de los datos "
+     "y la representación es única (cada MA no invertible tiene uno invertible con la misma ACF)."),
+    ("Coeficientes significativos", "Prueba z de cada φ y θ al 5% (H₀: vale 0), con errores estándar robustos",
+     "Parsimonia: un coeficiente que no se distingue de 0 no aporta, solo agrega varianza al pronóstico y es señal de "
+     "sobreajuste; conviene bajar el orden."),
+    ("Residuos sin autocorrelación", "Ljung-Box a " + " y ".join(str(k) for k in config.LJUNG_BOX_REZAGOS)
+     + " rezagos (H₀: no hay autocorrelación)",
+     "Si queda autocorrelación, el pasado todavía tiene información que el modelo no usó: está mal especificado. Los "
+     "residuos deben ser ruido blanco."),
+    ("Residuos normales", "Jarque-Bera (H₀: asimetría 0 y curtosis 3)",
+     "La verosimilitud, las pruebas de los coeficientes y los intervalos de pronóstico suponen errores normales; si "
+     "falla, el pronóstico puntual sigue siendo válido, pero los intervalos y los p-valores dejan de ser exactos."),
+]
+
+
+def nombre_parametro(nombre):
+    if nombre == "const":
+        return "μ (media)"
+    if nombre.startswith("ar.L"):
+        return f"φ{nombre[4:]}"
+    if nombre.startswith("ma.L"):
+        return f"θ{nombre[4:]}"
+    return nombre
+
+
 def ecuacion_arima(arima):
     """El ARMA elegido, escrito sobre el log-retorno en %."""
     media = arima["constante"]
@@ -826,32 +913,93 @@ with tab_serie:
         arima = arts["resumen"]["arima"]
         carpeta_arima = arts["carpeta"]
 
-        st.subheader("3. Identificación y selección del modelo")
+        st.subheader("3. Estimación y selección del modelo")
         busqueda = pd.read_csv(carpeta_arima / "busqueda_arima.csv")
         st.markdown(f"Se ajustaron **{len(busqueda)} modelos ARMA(p, q)**, con p de 0 a {int(busqueda['p'].max())} y q "
-                    f"de 0 a {int(busqueda['q'].max())}, sobre el log-retorno del tramo de desarrollo, por máxima "
-                    "verosimilitud. Gana el de **menor AIC** entre los que convergen y quedan estacionarios e "
-                    f"invertibles: **{arima['nombre']}** (AIC {arima['aic']:.1f}, BIC {arima['bic']:.1f}).")
-        tabla_aic = busqueda.pivot(index="p", columns="q", values="aic").sort_index()
-        validos = busqueda.pivot(index="p", columns="q", values="valido").reindex_like(tabla_aic)
-        diferencia = tabla_aic.to_numpy() - arima["aic"]
-        textos = [[(f"{v:.1f}" if ok else f"{v:.1f} (descartado)") for v, ok in zip(fila_v, fila_ok)]
-                  for fila_v, fila_ok in zip(diferencia, validos.to_numpy())]
-        fig_aic = go.Figure(go.Heatmap(z=diferencia, x=[f"q = {q}" for q in tabla_aic.columns],
-                                       y=[f"p = {p}" for p in tabla_aic.index], text=textos, texttemplate="%{text}",
-                                       colorscale="Blues_r", showscale=False,
-                                       hovertemplate="%{y}, %{x}<br>AIC - AIC mínimo = %{z:.2f}<extra></extra>"))
-        fig_aic.update_yaxes(autorange="reversed")
+                    f"de 0 a {int(busqueda['q'].max())}, sobre el log-retorno (en %) del tramo de desarrollo, por máxima "
+                    "verosimilitud y con errores estándar robustos. Cada uno se revisa con cinco requisitos:")
+        st.dataframe(pd.DataFrame(REQUISITOS_ARIMA_TEXTO, columns=["requisito", "cómo se verifica", "por qué se exige"]),
+                     hide_index=True)
+        if "requisitos" not in arima:
+            st.info("Este modelo se entrenó antes de la selección por requisitos; se actualiza al volver a entrenar.")
+        else:
+            fallas = [modelos_series.REQUISITOS_ARIMA[clave] for clave, cumple in arima["requisitos"].items()
+                      if not cumple]
+            st.markdown("**Regla de selección:** gana el modelo que cumple los cinco requisitos; si ninguno los cumple "
+                        "todos, el que cumple más, y entre los que cumplen los mismos, el de menor AIC (el criterio de "
+                        f"información de Akaike, que premia el ajuste y castiga cada parámetro). Elegido: "
+                        f"**{arima['nombre']}**, con **{arima['requisitos_cumplidos']} de 5** requisitos "
+                        f"(AIC {arima['aic']:.1f}, BIC {arima['bic']:.1f}).")
+            if fallas:
+                st.info("Requisitos que no cumple: " + "; ".join(fallas) + ". Ningún modelo de la rejilla cumplió "
+                        "más requisitos que este.")
+            tabla_req = busqueda.pivot(index="p", columns="q", values="requisitos").sort_index()
+            tabla_aic = busqueda.pivot(index="p", columns="q", values="aic").reindex_like(tabla_req)
+            diferencia = tabla_aic.to_numpy() - arima["aic"]
+            textos = [[f"{int(n)}/5 · {d:+.1f}" for n, d in zip(fila_n, fila_d)]
+                      for fila_n, fila_d in zip(tabla_req.to_numpy(), diferencia)]
+            fig_req = go.Figure(go.Heatmap(z=tabla_req.to_numpy(), x=[f"q = {q}" for q in tabla_req.columns],
+                                           y=[f"p = {p}" for p in tabla_req.index], text=textos, texttemplate="%{text}",
+                                           colorscale="Blues", zmin=0, zmax=5, showscale=False,
+                                           hovertemplate="%{y}, %{x}<br>%{text}<extra></extra>"))
+            fig_req.update_yaxes(autorange="reversed")
+            st.plotly_chart(estilo(fig_req, alto=380, titulo="Requisitos cumplidos por cada ARMA(p, q) · AIC menos el "
+                                   "AIC del elegido", saltos=False, hover="closest"), key="arima_requisitos")
+            st.caption("Cada celda muestra cuántos de los 5 requisitos cumple el modelo y su AIC menos el AIC del elegido "
+                       "(negativo = AIC menor que el del elegido).")
+            ranking = busqueda.head(10)
+            st.dataframe(pd.DataFrame({
+                "modelo": [f"ARIMA({int(p)},1,{int(q)})" for p, q in zip(ranking["p"], ranking["q"])],
+                "requisitos": [f"{int(n)}/5" for n in ranking["requisitos"]],
+                "estacionario": ["sí" if v else "no" for v in ranking["estacionario"]],
+                "invertible": ["sí" if v else "no" for v in ranking["invertible"]],
+                "coef. significativos": ["sí" if v else "no" for v in ranking["coef_significativos"]],
+                "Ljung-Box (p mínimo)": [texto_p_valor(v) for v in ranking["ljung_box_p"]],
+                "Jarque-Bera (p)": [texto_p_valor(v) for v in ranking["jarque_bera_p"]],
+                "AIC": ranking["aic"].round(1),
+                "raíces casi comunes": ["sí" if v else "no" for v in ranking["raices_casi_comunes"]],
+            }), hide_index=True)
+            with st.expander("Tabla completa de la búsqueda"):
+                st.dataframe(busqueda, hide_index=True)
+
+            st.markdown("**Coeficientes del modelo elegido.** Prueba z de cada coeficiente, H₀: el coeficiente vale 0. "
+                        "Con errores estándar robustos (sándwich), que siguen siendo válidos aunque los residuos no sean "
+                        "normales.")
+            st.dataframe(pd.DataFrame({
+                "parámetro": [nombre_parametro(c["parametro"]) for c in arima["coeficientes"]],
+                "estimación": [round(c["estimacion"], 4) for c in arima["coeficientes"]],
+                "error estándar": [round(c["error_estandar"], 4) for c in arima["coeficientes"]],
+                "z": [round(c["z"], 2) for c in arima["coeficientes"]],
+                "p-valor": [texto_p_valor(c["p_valor"]) for c in arima["coeficientes"]],
+                "IC 95%": [f"[{c['ic_bajo']:.4f}, {c['ic_alto']:.4f}]" for c in arima["coeficientes"]],
+                "significativo al 5%": ["sí" if c["significativo"] else "no" for c in arima["coeficientes"]],
+            }), hide_index=True)
+            st.caption("La media μ no cuenta para el requisito: se prueban solo los coeficientes φ (parte AR) y θ (parte "
+                       "MA), que son los que definen el orden del modelo. Un coeficiente es significativo si su "
+                       "intervalo del 95% no incluye el 0. Un ARIMA(0,1,0) cumple el requisito porque no tiene φ ni θ "
+                       "que probar: es la caminata aleatoria con deriva.")
+            correlacion = arima.get("correlacion", {})
+            if correlacion.get("matriz"):
+                etiquetas = [nombre_parametro(n) for n in correlacion["nombres"]]
+                matriz = np.array([[np.nan if v is None else v for v in fila] for fila in correlacion["matriz"]])
+                fig_cor = go.Figure(go.Heatmap(z=matriz, x=etiquetas, y=etiquetas, zmin=-1, zmax=1,
+                                               colorscale="RdBu", text=np.round(matriz, 2), texttemplate="%{text}",
+                                               showscale=False))
+                fig_cor.update_yaxes(autorange="reversed")
+                st.plotly_chart(estilo(fig_cor, alto=320, titulo="Correlación entre las estimaciones", saltos=False,
+                                       hover="closest"), key="arima_correlacion")
+                st.caption("Correlaciones cercanas a ±1 entre un φ y un θ indican que los dos parámetros explican lo "
+                           "mismo: el modelo tiene parámetros de sobra.")
+            if arima.get("raices_casi_comunes"):
+                st.warning("Una raíz del AR casi coincide con una del MA: se cancelan y el modelo es, en la práctica, "
+                           "uno de menor orden.")
+
         c7, c8 = st.columns([3, 2])
-        c7.plotly_chart(estilo(fig_aic, alto=320, titulo="AIC de cada ARMA(p, q) menos el AIC del elegido (0 = elegido)",
-                               saltos=False, hover="closest"), key="arima_aic")
-        c8.markdown("**Modelo elegido**, sobre el log-retorno en %:")
-        c8.latex(ecuacion_arima(arima))
+        c7.markdown("**Modelo elegido**, sobre el log-retorno en %:")
+        c7.latex(ecuacion_arima(arima))
         c8.markdown(f"Media μ = {arima['constante']:.4f}% por hora y varianza del ruido σ² = {arima['sigma2']:.4f}. "
                     "Como el modelo es estacionario, su pronóstico a varias horas tiende a μ: después de pocas horas "
                     "el ARIMA, igual que el AR, pronostica que el precio crece a ese ritmo constante.")
-        with c8.expander("Tabla completa de la búsqueda"):
-            st.dataframe(busqueda, hide_index=True)
 
         filas_raices = []
         for polinomio, raices in (("AR", arima["raices_ar"]), ("MA", arima["raices_ma"])):
@@ -887,13 +1035,13 @@ with tab_serie:
         diagnostico = arima["diagnostico"]
         filas_diag = [{"prueba": f"Ljung-Box, {prueba['rezagos']} rezagos", "H₀": "los residuos no están correlacionados",
                        "estadístico": round(prueba["estadistico"], 2), "p-valor": texto_p_valor(prueba["p_valor"]),
-                       "conclusión": ("No se rechaza: se comportan como ruido blanco" if prueba["p_valor"] >= 0.05
-                                      else "Se rechaza: queda autocorrelación")}
+                       "conclusión": ("No se rechaza: se comportan como ruido blanco"
+                                      if prueba["p_valor"] >= config.ALFA_PRUEBAS else "Se rechaza: queda autocorrelación")}
                       for prueba in diagnostico["ljung_box"]]
         jb = diagnostico["jarque_bera"]
         filas_diag.append({"prueba": "Jarque-Bera", "H₀": "los residuos son normales",
                            "estadístico": round(jb["estadistico"], 1), "p-valor": texto_p_valor(jb["p_valor"]),
-                           "conclusión": ("No se rechaza: son normales" if jb["p_valor"] >= 0.05
+                           "conclusión": ("No se rechaza: son normales" if jb["p_valor"] >= config.ALFA_PRUEBAS
                                           else "Se rechaza: no son normales")})
         st.dataframe(pd.DataFrame(filas_diag), hide_index=True)
         st.caption(f"Asimetría de los residuos: {jb['asimetria']:.2f}; curtosis: {jb['curtosis']:.1f} (una normal tiene "
@@ -936,7 +1084,8 @@ with tab_eval:
             cv = resumen["validacion_cruzada"]
             st.markdown(f"AR y redes eligen sus hiperparámetros con **validación cruzada temporal** "
                         f"(`TimeSeriesSplit`, {cv['pliegues']} pliegues) sobre entrenamiento + validación. "
-                        "ARIMA elige p y q con el **AIC** sobre ese mismo tramo, como en Box-Jenkins. "
+                        "ARIMA elige p y q sobre ese mismo tramo con los **requisitos de Box-Jenkins** (raíces, coeficientes "
+                        "significativos y residuos), con el AIC para desempatar. "
                         "Prophet usa el tramo de validación, porque cada pliegue le exigiría decenas de ajustes más.")
             st.dataframe(pd.DataFrame(cv["tramos"]).rename_axis("pliegue").reset_index()
                          .assign(pliegue=lambda d: d["pliegue"] + 1), hide_index=True)
@@ -1035,7 +1184,7 @@ with tab_eval:
                                 ("busqueda_lstm.csv", "Búsqueda de hiperparámetros: LSTM"),
                                 ("busqueda_cnn.csv", f"Búsqueda de hiperparámetros: {velas_cnn.NOMBRE}"),
                                 ("busqueda_ar.csv", "Selección de p para AR(p)"),
-                                ("busqueda_arima.csv", "Selección de p y q para ARIMA (AIC)"),
+                                ("busqueda_arima.csv", "Selección de p y q para ARIMA (requisitos y AIC)"),
                                 ("busqueda_prophet.csv", "Búsqueda de hiperparámetros: Prophet")):
             if (carpeta / archivo).exists():
                 with st.expander(titulo):
@@ -1068,6 +1217,9 @@ with tab_datos:
 
 with tab_mis_datos:
     interfaz_cuenta.pestana_mis_datos(usuario)
+
+with tab_etica:
+    interfaz_etica.pestana()
 
 st.divider()
 st.caption(f"{config.NOMBRE_APP} es un proyecto académico de la Escuela Colombiana de Ingeniería Julio Garavito. Nada "
