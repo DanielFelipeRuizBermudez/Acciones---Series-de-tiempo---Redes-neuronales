@@ -1,53 +1,53 @@
 {
   "ticker": "AAPL",
   "intervalo": "1h",
-  "entrenado_en": "2026-11-11 21:34",
+  "entrenado_en": "2026-11-12 21:11",
   "caracteristicas": [
     "log_ret"
   ],
-  "velas": 3626,
+  "velas": 3633,
   "tramos": {
     "entrenamiento": {
       "desde": "2024-10-11 15:30",
-      "hasta": "2026-04-01 11:30",
-      "velas": 2537
+      "hasta": "2026-04-02 09:30",
+      "velas": 2542
     },
     "validacion": {
-      "desde": "2026-04-01 12:30",
-      "hasta": "2026-07-24 09:30",
-      "velas": 544
+      "desde": "2026-04-02 10:30",
+      "hasta": "2026-07-24 15:30",
+      "velas": 545
     },
     "prueba": {
-      "desde": "2026-07-24 10:30",
-      "hasta": "2026-11-11 14:30",
-      "velas": 544
+      "desde": "2026-07-27 09:30",
+      "hasta": "2026-11-12 14:30",
+      "velas": 545
     }
   },
   "validacion_cruzada": {
     "pliegues": 3,
     "tramos": [
       {
-        "entrena_hasta": "2025-03-26 09:30",
-        "valida_desde": "2025-03-26 10:30",
-        "valida_hasta": "2025-09-03 13:30"
+        "entrena_hasta": "2025-03-26 12:30",
+        "valida_desde": "2025-03-26 13:30",
+        "valida_hasta": "2025-09-04 10:30"
       },
       {
-        "entrena_hasta": "2025-09-03 13:30",
-        "valida_desde": "2025-09-03 14:30",
-        "valida_hasta": "2026-02-13 09:30"
+        "entrena_hasta": "2025-09-04 10:30",
+        "valida_desde": "2025-09-04 11:30",
+        "valida_hasta": "2026-02-13 14:30"
       },
       {
-        "entrena_hasta": "2026-02-13 09:30",
-        "valida_desde": "2026-02-13 10:30",
-        "valida_hasta": "2026-07-24 09:30"
+        "entrena_hasta": "2026-02-13 14:30",
+        "valida_desde": "2026-02-13 15:30",
+        "valida_hasta": "2026-07-24 15:30"
       }
     ]
   },
   "ar": {
     "p": 1,
-    "intercepto": 0.00011876728312078391,
+    "intercepto": 0.00012409786695592807,
     "coeficientes": [
-      0.03103089372496947
+      0.031384314631623056
     ]
   },
   "arima": {
@@ -56,24 +56,24 @@
     "q": 0,
     "nombre": "ARIMA(0,1,0)",
     "escala": 100.0,
-    "constante": 0.012067019710988384,
+    "constante": 0.012616796920640062,
     "ar": [],
     "ma": [],
-    "sigma2": 0.44286417944327233,
-    "aic": 6240.1185513630935,
-    "bic": 6252.185219394853,
+    "sigma2": 0.44278533287560534,
+    "aic": 6251.664008542333,
+    "bic": 6263.734566364623,
     "raices_ar": [],
     "raices_ma": [],
     "raices_casi_comunes": false,
     "coeficientes": [
       {
         "parametro": "const",
-        "estimacion": 0.012067019710988384,
-        "error_estandar": 0.011987323272403247,
-        "z": 1.0066483932045622,
-        "p_valor": 0.3141037701230194,
-        "ic_bajo": -0.01142813390292198,
-        "ic_alto": 0.03556217332489875,
+        "estimacion": 0.012616796920640062,
+        "error_estandar": 0.011974518318117744,
+        "z": 1.053637113866245,
+        "p_valor": 0.29204909039342086,
+        "ic_bajo": -0.010853258982870715,
+        "ic_alto": 0.03608685282415084,
         "significativo": false
       }
     ],
@@ -93,88 +93,88 @@
       "ljung_box": [
         {
           "rezagos": 14,
-          "estadistico": 20.141154715888717,
-          "p_valor": 0.1257535804374783
+          "estadistico": 20.242754141177087,
+          "p_valor": 0.12267183562674952
         },
         {
           "rezagos": 21,
-          "estadistico": 56.72255008519836,
-          "p_valor": 3.9495390399927786e-05
+          "estadistico": 56.999574304832336,
+          "p_valor": 3.593878703785299e-05
         }
       ],
       "jarque_bera": {
-        "estadistico": 52379.014334505875,
+        "estadistico": 52332.11723379871,
         "p_valor": 0.0,
-        "asimetria": -0.47551047113285083,
-        "curtosis": 23.17371714692979
+        "asimetria": -0.47426470854868663,
+        "curtosis": 23.14513816506232
       }
     },
     "integracion": [
       {
         "d": 0,
         "serie": "ln(precio)",
-        "estadistico": -0.6301418573616189,
-        "p_valor": 0.8640247263454142,
+        "estadistico": -0.5236206315243263,
+        "p_valor": 0.8873240853527682,
         "rezagos": 20,
-        "n": 3061,
-        "critico_5": -2.862484687187665,
+        "n": 3067,
+        "critico_5": -2.86248283819979,
         "estacionaria": false
       },
       {
         "d": 1,
         "serie": "Δ ln(precio) = log-retorno",
-        "estadistico": -12.692080407577746,
-        "p_valor": 1.1264620226167767e-23,
+        "estadistico": -12.670138638128103,
+        "p_valor": 1.2497031606912669e-23,
         "rezagos": 19,
-        "n": 3061,
-        "critico_5": -2.862484687187665,
+        "n": 3067,
+        "critico_5": -2.86248283819979,
         "estacionaria": true
       }
     ]
   },
   "prophet": {
     "changepoint_prior_scale": 0.3,
-    "seasonality_prior_scale": 1.0,
+    "seasonality_prior_scale": 0.1,
     "reajuste_cada_velas": 7
   },
   "redes": {
     "rnn": {
       "ventana": 7,
-      "unidades": 64,
+      "unidades": 32,
       "capas": 1,
       "dropout": 0.2,
       "tasa": 0.01,
-      "rmse_cv_pct": 0.6756012460403333,
-      "desv_pliegues_pct": 0.13412526261632685,
-      "epocas_promedio": 11.333333333333334,
-      "parametros": 4289,
-      "epocas_finales": 11,
+      "rmse_cv_pct": 0.678287624068959,
+      "desv_pliegues_pct": 0.13335741465206594,
+      "epocas_promedio": 10.0,
+      "parametros": 1121,
+      "epocas_finales": 10,
       "optimizador": "SGD"
     },
     "lstm": {
-      "ventana": 35,
+      "ventana": 7,
       "unidades": 64,
       "capas": 1,
       "dropout": 0.2,
       "tasa": 0.01,
-      "rmse_cv_pct": 0.675273811235838,
-      "desv_pliegues_pct": 0.13354345553875524,
-      "epocas_promedio": 37.333333333333336,
+      "rmse_cv_pct": 0.6758321757235174,
+      "desv_pliegues_pct": 0.1327757586878615,
+      "epocas_promedio": 37.666666666666664,
       "parametros": 16961,
-      "epocas_finales": 37,
+      "epocas_finales": 38,
       "optimizador": "SGD"
     }
   },
   "cnn": {
-    "velas": 20,
+    "velas": 10,
     "filtros": 32,
     "tasa": 0.01,
     "dropout": 0.2,
-    "perdida_cv": 0.6927554607391357,
-    "desv_pliegues": 0.0006149886743459658,
-    "acierto_cv_pct": 50.606061021486916,
-    "epocas_promedio": 4.0,
-    "epocas_finales": 4,
+    "perdida_cv": 0.6927450895309448,
+    "desv_pliegues": 0.0014054354367669766,
+    "acierto_cv_pct": 51.14569664001465,
+    "epocas_promedio": 5.0,
+    "epocas_finales": 5,
     "optimizador": "SGD",
     "alto": 40,
     "ancho_vela": 4
