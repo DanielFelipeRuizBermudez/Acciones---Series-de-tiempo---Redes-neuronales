@@ -28,6 +28,11 @@ st.set_page_config(page_title=config.NOMBRE_APP, page_icon=str(config.ICONO) if 
                    layout="wide")
 if config.LOGO.exists():
     st.logo(str(config.LOGO), icon_image=str(config.ICONO) if config.ICONO.exists() else None)
+    st.html("""<style>
+[data-testid="stSidebarHeader"] { height: auto; min-height: 3.75rem; padding-top: 1rem; }
+[data-testid="stSidebarHeader"] > :first-child { flex: 1 1 0%; min-width: 0; }
+[data-testid="stSidebarHeader"] img.stLogo { width: 100%; height: auto; max-height: 5rem; }
+</style>""")
 
 INTERVALO = config.INTERVALO_MODELO
 VIVO = config.INTERVALO_VIVO
@@ -70,6 +75,34 @@ def hora_doble(marca, con_fecha=True):
     bogota = marca.tz_convert(config.ZONA_USUARIO)
     fecha = f"{DIAS[ny.weekday()]} {ny:%d/%m} " if con_fecha else ""
     return f"{fecha}{ny:%H:%M} NY ({bogota:%H:%M} Bogotá)"
+
+
+def proximo_cambio_horario(momento):
+    """Primer día en que Nueva York cambia de horario (verano o invierno) después de `momento`."""
+    mediodia = momento.tz_convert(config.ZONA_MERCADO).normalize() + pd.Timedelta(hours=12)
+    actual = mediodia.utcoffset()
+    for dias in range(1, 400):
+        dia = mediodia + pd.Timedelta(days=dias)
+        if dia.utcoffset() != actual:
+            return dia
+    return None
+
+
+def horas_encabezado(momento):
+    """Hora de Nueva York y de Bogotá.
+
+    Bogotá no cambia de horario y Nueva York sí: del primer domingo de noviembre al segundo domingo de marzo las dos
+    ciudades tienen la misma hora, y el resto del año Nueva York va una hora adelante.
+    """
+    ny = momento.tz_convert(config.ZONA_MERCADO)
+    bogota = momento.tz_convert(config.ZONA_USUARIO)
+    cambio = proximo_cambio_horario(momento)
+    fecha = f"{cambio.day} de {interfaz_cuenta.MESES[cambio.month - 1]}" if cambio is not None else None
+    if ny.utcoffset() == bogota.utcoffset():
+        texto = f"{ny:%H:%M} en Nueva York y en Bogotá"
+        return f"{texto} (misma hora; desde el {fecha} Nueva York va una hora adelante)" if fecha else texto
+    texto = f"{ny:%H:%M} en Nueva York · {bogota:%H:%M} en Bogotá"
+    return f"{texto} (Nueva York va una hora adelante; desde el {fecha} tienen la misma hora)" if fecha else texto
 
 
 def estilo(fig, alto=380, titulo=None, saltos=True, hover="x unified"):
@@ -242,8 +275,7 @@ interfaz_cuenta.barra_lateral(usuario)
 ahora = datos.ahora_mercado()
 estado = "Mercado abierto" if datos.mercado_abierto(ahora) else "Mercado cerrado"
 st.title(ticker)
-st.caption(f"{estado} · {ahora:%H:%M} en Nueva York · {ahora.tz_convert(config.ZONA_USUARIO):%H:%M} en Bogotá · "
-           "la bolsa de EE. UU. opera de 9:30 a 16:00, hora de Nueva York")
+st.caption(f"{estado} · {horas_encabezado(ahora)} · la bolsa de EE. UU. opera de 9:30 a 16:00, hora de Nueva York")
 
 df_hora, error_hora = obtener(ticker, INTERVALO)
 if df_hora.empty:
