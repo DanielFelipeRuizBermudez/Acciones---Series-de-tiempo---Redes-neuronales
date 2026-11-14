@@ -88,7 +88,8 @@ PRINCIPIOS = {
             ("Registro de cada recuperación de la cuenta y del uso de la llave de emergencia, visible para el titular",
              "Mis datos"),
             ("Aviso de cambio de política con las novedades, en la barra lateral y en Mis datos", "Barra lateral y Mis datos"),
-            ("Aviso al correo de cada inicio de sesión, para que el titular note un acceso que no hizo",
+            ("Correo de bienvenida al crear la cuenta y aviso de cada inicio de sesión, para que el titular note "
+             "una cuenta o un acceso que no hizo",
              "Correo del titular"),
         ],
     },
@@ -136,7 +137,7 @@ def diagrama():
         "neon": ("Neon (Postgres)", ["solo datos cifrados", "token aleatorio"], ["No maleficencia"]),
         "yahoo": ("Yahoo Finance", ["precios públicos"], []),
         "gemini": ("Google Gemini", ["solo preguntas anonimizadas"], ["No maleficencia"]),
-        "gmail": ("Gmail", ["código de recuperación", "aviso de inicio de sesión"], ["No maleficencia", "Transparencia"]),
+        "gmail": ("Gmail", ["bienvenida y avisos de inicio de sesión", "código de recuperación"], ["No maleficencia", "Transparencia"]),
         "emergencia": ("Llave de emergencia", ["fuera de la app", "archivo + frase del admin"],
                        ["No maleficencia", "Autonomía"]),
     }

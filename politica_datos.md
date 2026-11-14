@@ -12,7 +12,7 @@ Versión del {version}. Esta política regula los datos que la aplicación {nomb
 | Dato | Obligatorio | Para qué se usa | Cómo se guarda |
 |---|---|---|---|
 | Alias | Sí | Identificar al usuario dentro de la aplicación. No tiene que ser el nombre real | En claro |
-| Correo electrónico | Sí | Iniciar sesión, recibir el código de recuperación cuando el usuario lo pide, recibir un aviso cada vez que se inicia sesión en su cuenta y, solo si el usuario lo autoriza, ser contactado | Cifrado con la llave del usuario; para iniciar sesión y recuperar la cuenta se usa un índice HMAC de una sola vía |
+| Correo electrónico | Sí | Iniciar sesión, recibir el código de recuperación cuando el usuario lo pide, recibir un correo de bienvenida al crear la cuenta y un aviso cada vez que se inicia sesión en ella y, solo si el usuario lo autoriza, ser contactado | Cifrado con la llave del usuario; para iniciar sesión y recuperar la cuenta se usa un índice HMAC de una sola vía |
 | Nombre completo, teléfono, dirección y ciudad | Sí | Poder contactar al usuario, solo si él lo autoriza en cada caso | Cifrados con la llave del usuario |
 | Fecha de nacimiento | Sí | Comprobar que el usuario es mayor de 18 años | Cifrada con la llave del usuario |
 | Contraseña | Sí | Proteger la cuenta y la llave privada del usuario | Solo como hash bcrypt, nunca en texto plano |
@@ -69,7 +69,7 @@ Los datos no se venden, no se usan para publicidad y no se usan para perfilar al
 **7. Encargados y transferencia internacional**
 
 - **Streamlit Community Cloud** aloja la aplicación y **Neon** aloja la base de usuarios. Sus servidores están fuera de Colombia; por eso la autorización del registro incluye el consentimiento expreso para ese almacenamiento, como permite el artículo 26 de la Ley 1581. Los datos personales llegan a esos servidores ya cifrados con la llave del usuario.
-- **Google (Gmail)** envía, desde la cuenta del proyecto, el correo con el código de recuperación cuando el usuario lo pide y el aviso de cada inicio de sesión. El primero lleva el código y su vencimiento; el segundo, la fecha y la hora del inicio de sesión, nada más.
+- **Google (Gmail)** envía, desde la cuenta del proyecto, el correo de bienvenida al crear la cuenta, el código de recuperación cuando el usuario lo pide y el aviso de cada inicio de sesión. La bienvenida lleva la fecha y la hora de creación y si se activó la copia de rescate; el código, su vencimiento; el aviso, la fecha y la hora del inicio de sesión, nada más.
 - **Google (API de Gemini)** recibe solo el texto de las preguntas, ya anonimizado: los nombres, documentos, correos, teléfonos, números de cuenta, direcciones y fechas de nacimiento se reemplazan por etiquetas como [NOMBRE] antes de enviarse. La pregunta viaja por medio de LiteLLM, una librería que corre dentro de la aplicación. Google no recibe el alias, los datos personales ni la contraseña.
 
 **8. Derechos del titular**

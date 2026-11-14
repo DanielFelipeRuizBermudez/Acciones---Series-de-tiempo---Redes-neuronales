@@ -33,7 +33,7 @@ AVISO_PRIVACIDAD = (
     "una llave que solo abre tu contraseña: nadie más los puede leer, y si el administrador necesita contactarte, te "
     "pide permiso y tú decides qué datos compartes y por cuánto tiempo. Si olvidas tu contraseña, recuperas la cuenta "
     "con un código que llega a tu correo; tus datos personales solo se recuperan si activas la copia de rescate con la "
-    "llave de emergencia. Cada vez que se inicia sesión en tu cuenta te llega un aviso al correo. La fecha de "
+    "llave de emergencia. Al crear la cuenta y cada vez que se inicia sesión te llega un aviso al correo. La fecha de "
     "nacimiento sirve para comprobar "
     "que eres mayor de edad. Antes de enviarse a Google Gemini, las preguntas al agente se anonimizan. Tus datos no se "
     "venden ni se usan para publicidad. Puedes conocer, actualizar, rectificar y suprimir tus datos, o revocar esta "
@@ -186,27 +186,48 @@ def _cuando_texto(momento=None):
             f"{sufijo} (hora de Bogotá)")
 
 
-def _avisar_inicio(correo):
-    """Envía en segundo plano el aviso de inicio de sesión al correo con el que se entró.
+def _enviar_en_segundo_plano(descripcion, destino, enviar):
+    """Envía un correo sin hacer esperar al usuario; si el envío falla, la aplicación sigue normal.
 
-    El correo se toma de lo que el usuario acaba de escribir, porque la aplicación no guarda una copia legible. Si el
-    envío falla, el inicio de sesión sigue normal.
+    `enviar(usuario, clave, servidor, puerto)` hace el envío con la cuenta del proyecto.
     """
-    destino, cuando = correo.strip(), _cuando_texto()
     usuario, clave = _secreto("SMTP_USUARIO"), _secreto("SMTP_CLAVE")
     if usuario and clave:
         servidor = _secreto("SMTP_SERVIDOR") or correo_saliente.SERVIDOR_POR_DEFECTO
         puerto = _secreto("SMTP_PUERTO") or correo_saliente.PUERTO_POR_DEFECTO
 
-        def enviar():
+        def tarea():
             try:
-                correo_saliente.enviar_aviso_inicio(destino, cuando, usuario, clave, servidor, puerto)
+                enviar(usuario, clave, servidor, puerto)
             except Exception as error:
-                print(f"No se pudo enviar el aviso de inicio de sesión ({type(error).__name__}).", flush=True)
+                print(f"No se pudo enviar {descripcion} ({type(error).__name__}).", flush=True)
 
-        threading.Thread(target=enviar, daemon=True).start()
+        threading.Thread(target=tarea, daemon=True).start()
     elif _envio_local():
-        print(f"[base local] Aviso de inicio de sesión para {destino}: {cuando}", flush=True)
+        print(f"[base local] {descripcion} para {destino}", flush=True)
+
+
+def _avisar_inicio(correo):
+    """Aviso de inicio de sesión al correo con el que se entró.
+
+    El correo se toma de lo que el usuario acaba de escribir, porque la aplicación no guarda una copia legible.
+    """
+    destino, cuando = correo.strip(), _cuando_texto()
+    _enviar_en_segundo_plano(
+        f"el aviso de inicio de sesión del {cuando}", destino,
+        lambda usuario, clave, servidor, puerto: correo_saliente.enviar_aviso_inicio(
+            destino, cuando, usuario, clave, servidor, puerto))
+
+
+def _avisar_registro(correo, con_rescate):
+    """Correo de bienvenida al crear la cuenta, al correo que el usuario acaba de registrar."""
+    destino, cuando = correo.strip(), _cuando_texto()
+    if not destino:
+        return
+    _enviar_en_segundo_plano(
+        f"el correo de bienvenida del {cuando}", destino,
+        lambda usuario, clave, servidor, puerto: correo_saliente.enviar_bienvenida(
+            destino, cuando, con_rescate, usuario, clave, servidor, puerto))
 
 
 def _casilla_rescate(clave):
@@ -316,6 +337,7 @@ def _formularios(bd):
                 st.error(str(error))
             else:
                 _abrir_sesion(usuario)
+                _avisar_registro(personales.get("correo", ""), rescate is not None)
                 st.session_state["resultado_operacion"] = (
                     f"Cuenta creada. Tienes {config.SALDO_INICIAL:,.0f} USD ficticios para empezar.")
                 st.rerun()

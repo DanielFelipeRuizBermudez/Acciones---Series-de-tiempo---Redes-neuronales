@@ -1,8 +1,9 @@
-"""Correos de la aplicación (SMTP con TLS): el código de recuperación y el aviso de inicio de sesión.
+"""Correos de la aplicación (SMTP con TLS): bienvenida, código de recuperación y aviso de inicio de sesión.
 
 Usa la cuenta de correo del proyecto. Con Gmail hay que activar la verificación en dos pasos y crear una contraseña de
 aplicación; el usuario y esa contraseña van en los Secrets de Streamlit (SMTP_USUARIO y SMTP_CLAVE), nunca en el
-repositorio. Cada correo lleva solo lo necesario: el código y su vencimiento, o la fecha y la hora del inicio de sesión.
+repositorio. Cada correo lleva solo lo necesario: la fecha y la hora de la cuenta creada o del inicio de sesión, o el
+código y su vencimiento.
 """
 
 import html
@@ -35,7 +36,7 @@ def _html(titulo, parrafos, con_logo):
 <tr><td style="padding:8px 28px 0 28px;font-size:20px;font-weight:700;">{html.escape(titulo)}</td></tr>
 <tr><td style="padding:16px 28px 8px 28px;font-size:15px;line-height:1.5;">{cuerpo}</td></tr>
 <tr><td style="padding:12px 28px 24px 28px;font-size:12px;color:#666666;border-top:1px solid #eeeeee;">
-{html.escape(config.NOMBRE_APP)} · proyecto académico. Este correo se envía automáticamente; no lo respondas.
+{html.escape(config.NOMBRE_APP)} · proyecto académico. Este correo se envía automáticamente.
 </td></tr>
 </table>
 </td></tr>
@@ -86,6 +87,26 @@ def mensaje_inicio_sesion(remitente, destino, cuando):
                   "Nuevo inicio de sesión", texto)
 
 
+def mensaje_bienvenida(remitente, destino, cuando, con_rescate):
+    """`cuando`: fecha y hora de creación de la cuenta ya escritas para mostrarse."""
+    rescate = ("Activaste la copia de rescate de tu llave: si olvidas tu contraseña, recuperas la cuenta con un código "
+               "que llega a este correo y también tus datos personales. Puedes quitarla en Mis datos."
+               if con_rescate else
+               "No activaste la copia de rescate de tu llave: si olvidas tu contraseña, recuperas la cuenta con un "
+               "código que llega a este correo, pero tendrás que volver a escribir tus datos personales. Puedes "
+               "activarla cuando quieras en Mis datos.")
+    texto = [
+        f"Tu cuenta de {config.NOMBRE_APP} se creó el {cuando}.",
+        f"Tienes {config.SALDO_INICIAL:,.0f} USD ficticios para practicar con el portafolio simulado. Las predicciones "
+        "de la aplicación son material educativo, no una recomendación de inversión.",
+        "Tus datos personales quedaron cifrados con tu propia llave, que se abre con tu contraseña.",
+        rescate,
+        f"Si no creaste esta cuenta, escribe a {config.CORREO_CONTACTO}.",
+    ]
+    return _armar(remitente, destino, f"Tu cuenta de {config.NOMBRE_APP} está lista",
+                  f"{config.NOMBRE_APP} te da la bienvenida", texto)
+
+
 def _enviar(mensaje, usuario, clave, servidor, puerto):
     contexto = ssl.create_default_context()
     with smtplib.SMTP_SSL(servidor, int(puerto), context=contexto, timeout=20) as conexion:
@@ -101,3 +122,8 @@ def enviar_codigo(destino, codigo, minutos, usuario, clave, servidor=SERVIDOR_PO
 def enviar_aviso_inicio(destino, cuando, usuario, clave, servidor=SERVIDOR_POR_DEFECTO,
                         puerto=PUERTO_POR_DEFECTO):
     _enviar(mensaje_inicio_sesion(usuario, destino, cuando), usuario, clave, servidor, puerto)
+
+
+def enviar_bienvenida(destino, cuando, con_rescate, usuario, clave, servidor=SERVIDOR_POR_DEFECTO,
+                      puerto=PUERTO_POR_DEFECTO):
+    _enviar(mensaje_bienvenida(usuario, destino, cuando, con_rescate), usuario, clave, servidor, puerto)
