@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 from datetime import date
 
 import pandas as pd
@@ -20,6 +21,8 @@ import solicitudes
 
 RUTA_POLITICA = config.RAIZ / "politica_datos.md"
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+         "noviembre", "diciembre"]
 TIPO_A_TEXTO = {"compra": "Compra", "venta": "Venta"}
 
 AVISO_PRIVACIDAD = (
@@ -30,7 +33,8 @@ AVISO_PRIVACIDAD = (
     "una llave que solo abre tu contraseña: nadie más los puede leer, y si el administrador necesita contactarte, te "
     "pide permiso y tú decides qué datos compartes y por cuánto tiempo. Si olvidas tu contraseña, recuperas la cuenta "
     "con un código que llega a tu correo; tus datos personales solo se recuperan si activas la copia de rescate con la "
-    "llave de emergencia. La fecha de nacimiento sirve para comprobar "
+    "llave de emergencia. Cada vez que se inicia sesión en tu cuenta te llega un aviso al correo. La fecha de "
+    "nacimiento sirve para comprobar "
     "que eres mayor de edad. Antes de enviarse a Google Gemini, las preguntas al agente se anonimizan. Tus datos no se "
     "venden ni se usan para publicidad. Puedes conocer, actualizar, rectificar y suprimir tus datos, o revocar esta "
     "autorización, desde la pestaña Mis datos o escribiendo a {correo}. La política completa está en el enlace de "
@@ -173,6 +177,38 @@ def _enviador_codigos():
     return None
 
 
+def _cuando_texto(momento=None):
+    """Fecha y hora en Bogotá escritas para un correo: '13 de noviembre de 2026 a las 3:14 p. m. (hora de Bogotá)'."""
+    momento = momento or pd.Timestamp.now(tz=config.ZONA_USUARIO)
+    hora = momento.hour % 12 or 12
+    sufijo = "a. m." if momento.hour < 12 else "p. m."
+    return (f"{momento.day} de {MESES[momento.month - 1]} de {momento.year} a las {hora}:{momento.minute:02d} "
+            f"{sufijo} (hora de Bogotá)")
+
+
+def _avisar_inicio(correo):
+    """Envía en segundo plano el aviso de inicio de sesión al correo con el que se entró.
+
+    El correo se toma de lo que el usuario acaba de escribir, porque la aplicación no guarda una copia legible. Si el
+    envío falla, el inicio de sesión sigue normal.
+    """
+    destino, cuando = correo.strip(), _cuando_texto()
+    usuario, clave = _secreto("SMTP_USUARIO"), _secreto("SMTP_CLAVE")
+    if usuario and clave:
+        servidor = _secreto("SMTP_SERVIDOR") or correo_saliente.SERVIDOR_POR_DEFECTO
+        puerto = _secreto("SMTP_PUERTO") or correo_saliente.PUERTO_POR_DEFECTO
+
+        def enviar():
+            try:
+                correo_saliente.enviar_aviso_inicio(destino, cuando, usuario, clave, servidor, puerto)
+            except Exception as error:
+                print(f"No se pudo enviar el aviso de inicio de sesión ({type(error).__name__}).", flush=True)
+
+        threading.Thread(target=enviar, daemon=True).start()
+    elif _envio_local():
+        print(f"[base local] Aviso de inicio de sesión para {destino}: {cuando}", flush=True)
+
+
 def _casilla_rescate(clave):
     """Casilla opcional de la copia de rescate (dentro de un st.form). Devuelve la llave pública o None."""
     publica = llave_emergencia_publica()
@@ -247,6 +283,7 @@ def _formularios(bd):
                     st.error(str(error))
                 else:
                     _abrir_sesion(usuario)
+                    _avisar_inicio(correo)
                     st.rerun()
         return
 

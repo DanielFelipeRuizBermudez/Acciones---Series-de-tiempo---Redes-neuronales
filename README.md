@@ -1,13 +1,15 @@
-# Predicción de acciones: series de tiempo (stdg) + aprendizaje profundo (appr)
+# DAESA: predicción de acciones con series de tiempo y aprendizaje profundo
 
-Dashboard en Streamlit que descarga precios con **yfinance**, los va guardando automáticamente y predice si
-la **próxima vela de 1 hora** de una acción cierra arriba o abajo, con seis modelos:
+DAESA (Daniel, Aprendizaje profundo, Ética, Series de tiempo y Acciones) es una herramienta educativa en
+Streamlit que muestra qué pueden anticipar los modelos de series de tiempo y de aprendizaje profundo sobre el precio
+de una acción, y con qué incertidumbre, para practicar decisiones de compra y venta con dinero simulado y con los
+datos personales protegidos. Descarga precios con **yfinance**, los va guardando automáticamente y predice si la
+**próxima vela de 1 hora** de una acción cierra arriba o abajo, con cinco modelos:
 
 | Modelo | Materia | Qué hace | Archivo |
 |---|---|---|---|
 | AR(p) | Series de tiempo | Regresión lineal del retorno sobre sus `p` retornos anteriores | `modelos_series.py` |
 | ARIMA(p, d, q) | Series de tiempo | Box-Jenkins: `d` por la prueba ADF, ARMA(p, q) sobre la serie diferenciada y `p`, `q` por requisitos (raíces, coeficientes y residuos) y AIC | `modelos_series.py` |
-| Prophet | Series de tiempo | Tendencia + estacionalidad diaria y semanal sobre log(precio) | `modelos_series.py` |
 | RNN simple | Aprendizaje profundo | Red recurrente sobre ventanas de las últimas velas | `modelos_redes.py` |
 | LSTM | Aprendizaje profundo | Igual, con celdas LSTM (memoria de largo plazo) | `modelos_redes.py` |
 | CNN de velas | Aprendizaje profundo | Red convolucional que mira una imagen de las últimas velas y da la probabilidad de que la hora siguiente suba | `velas_cnn.py` |
@@ -16,7 +18,7 @@ Se comparan contra tres líneas base: *precio sin cambio*, *siempre sube* y *rep
 
 ## Instalación (Windows)
 
-Se recomienda Python 3.11 o 3.12 (TensorFlow y Prophet todavía pueden fallar con versiones más nuevas).
+Se recomienda Python 3.11 o 3.12 (TensorFlow todavía puede fallar con versiones más nuevas).
 
 ```powershell
 cd acciones_appr_stdg
@@ -24,8 +26,6 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
-
-> `fbprophet` ya no existe con ese nombre: el paquete actual es `prophet` (`from prophet import Prophet`).
 
 ## Uso
 
@@ -64,7 +64,7 @@ Consulta cada 2 minutos con el mercado abierto y cada 30 minutos con el mercado 
 ### Qué se predice
 
 Con las velas de **1 hora**: dado el cierre de la última vela completa, ¿la vela siguiente cerrará arriba o abajo?
-AR, ARIMA, Prophet, RNN y LSTM predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)` (regresión), y de
+AR, ARIMA, RNN y LSTM predicen el **log-retorno** de la vela siguiente, `ln(P_{t+1}) - ln(P_t)` (regresión), y de
 ahí salen el precio predicho y la dirección. La **CNN de velas** responde directamente si sube o baja
 (clasificación) mirando una imagen de las últimas velas. Se usan retornos y no precios porque el precio no es estacionario (la pestaña
 *Análisis de la serie* lo muestra con la prueba ADF) y una red que predice precios aprende a copiar el último valor.
@@ -85,14 +85,12 @@ dirección que dijeron los modelos.
    desarrollo): cada pliegue entrena con un bloque inicial y valida con el bloque siguiente, así nunca se entrena con
    datos posteriores a los de validación. Cada combinación se califica con el RMSE promedio de los pliegues y la
    mejor se reentrena con todo el desarrollo (las redes, durante el promedio de épocas que necesitaron en los
-   pliegues). El escalado se ajusta en cada pliegue solo con su parte de entrenamiento. Prophet usa el tramo de
-   validación, porque cada pliegue le exigiría decenas de ajustes más. ARIMA sigue a Box-Jenkins y elige con sus
-   requisitos sobre el desarrollo.
+   pliegues). El escalado se ajusta en cada pliegue solo con su parte de entrenamiento. ARIMA sigue a Box-Jenkins y elige
+   con sus requisitos sobre el desarrollo.
    - AR: `p` de 1 a 10.
    - ARIMA: `d` con la prueba de Dickey-Fuller aumentada sobre ln(precio) y `p`, `q` de 0 a 5 (36 modelos), por
      máxima verosimilitud con errores estándar robustos; gana el que cumple más requisitos de Box-Jenkins y, entre
      los que cumplen los mismos, el de menor AIC.
-   - Prophet: `changepoint_prior_scale` {0.01, 0.05, 0.3} × `seasonality_prior_scale` {0.1, 1, 10}.
    - RNN y LSTM: ventana {7, 14, 35 velas ≈ 1 día, 2 días, 1 semana} × unidades {32, 64} × capas {1, 2} ×
      tasa de aprendizaje {0.01, 0.05, 0.1}. Los pesos se ajustan con **descenso de gradiente estocástico** (SGD,
      sin momento) sobre lotes de 32 ventanas, minimizando el MSE, con dropout de 0.2 y *early stopping*
@@ -100,11 +98,10 @@ dirección que dijeron los modelos.
    - CNN de velas: velas por imagen {10, 20} × filtros {16, 32} × tasa de aprendizaje {0.01, 0.05}, con SGD,
      entropía cruzada binaria, dropout de 0.2 y el mismo *early stopping*. Se califica con la entropía cruzada
      promedio de los pliegues.
-   Las rejillas (`REJILLA_REDES`, `REJILLA_CNN`, `PROPHET_REJILLA`) y el optimizador se cambian en `config.py`. Cada
+   Las rejillas (`REJILLA_REDES`, `REJILLA_CNN`) y el optimizador se cambian en `config.py`. Cada
    valor nuevo multiplica el tiempo de entrenamiento.
 5. **Evaluación en prueba**: acierto de dirección con su margen de error al 95%, error medio del precio y RMSE del
-   retorno. Prophet se evalúa reajustándose una vez por día de prueba, sin ver nunca datos futuros. En los modelos
-   de regresión una predicción acierta si el signo del retorno predicho coincide con el del real; en la CNN, si da
+   retorno. En los modelos de regresión una predicción acierta si el signo del retorno predicho coincide con el del real; en la CNN, si da
    más de 50% y la hora sube o menos de 50% y baja.
 
 Todo queda en `modelos_entrenados/<TICKER>_1h/` y el dashboard lo carga automáticamente.
@@ -153,19 +150,13 @@ Un ARMA estacionario pronostica que el log-retorno vuelve a su media, así que a
 el AR, pronostica un precio que crece a un ritmo constante. Las rejillas están en `config.py` (`ARIMA_MAX_P`,
 `ARIMA_MAX_Q`) y la búsqueda queda en `busqueda_arima.csv`.
 
-### Prophet en una línea
-
-`log(precio) = tendencia(t) + efecto de la hora del día + efecto del día de la semana + ruido`. Es una regresión
-sobre el tiempo: no usa los valores anteriores como AR o las redes. La pestaña *Prophet* muestra el pronóstico y
-cada componente por separado.
-
 ### Pronóstico a varias horas (pestaña *Varias horas*)
 
 Además de la próxima hora, el dashboard pronostica **hora por hora** de 1 a 35 horas de mercado hacia adelante con el
 modelo ganador de cada tipo. AR, ARIMA, RNN y LSTM lo hacen de forma **recursiva**: predicen la hora siguiente, esa
 predicción entra a la ventana como si fuera un dato real y se predice la hora que sigue. La tabla *Paso a paso* muestra,
 para cada hora, la ventana que entró al modelo (con las predicciones marcadas), el log-retorno predicho y el precio.
-Prophet evalúa su curva en cada hora futura. Se puede pronosticar desde la última vela o desde un momento
+Se puede pronosticar desde la última vela o desde un momento
 de las últimas 10 sesiones para compararlo con lo que pasó, y calcular el error promedio y el acierto de dirección
 según el horizonte. La franja gris es el rango del 80% de una caminata aleatoria con la volatilidad reciente.
 

@@ -24,7 +24,10 @@ import preparacion
 import varias_horas
 import velas_cnn
 
-st.set_page_config(page_title="Predicción de acciones", layout="wide")
+st.set_page_config(page_title=config.NOMBRE_APP, page_icon=str(config.ICONO) if config.ICONO.exists() else None,
+                   layout="wide")
+if config.LOGO.exists():
+    st.logo(str(config.LOGO), icon_image=str(config.ICONO) if config.ICONO.exists() else None)
 
 INTERVALO = config.INTERVALO_MODELO
 VIVO = config.INTERVALO_VIVO
@@ -32,7 +35,8 @@ COLOR_REAL = "#2a78d6"
 COLOR_REFERENCIA = "#898781"
 COLOR_SUBE = "#0ca30c"
 COLOR_BAJA = "#d03b3b"
-COLORES_MODELO = {"Prophet": "#eb6834", "AR": "#1baf7a", "ARIMA": "#8c564b", "RNN simple": "#e87ba4",
+COLOR_ACENTO = "#eb6834"
+COLORES_MODELO = {"AR": "#1baf7a", "ARIMA": "#8c564b", "RNN simple": "#e87ba4",
                   "LSTM": "#9085e9", "CNN de velas": "#eda100"}
 COLORES_PLIEGUE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
 SALTOS_HORARIO = [dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")]
@@ -106,17 +110,10 @@ def completas_hasta(ticker, intervalo, ultima_iso):
     return df[df.index <= pd.Timestamp(ultima_iso)]
 
 
-@st.cache_resource(show_spinner="Ajustando Prophet…", max_entries=48)
-def prophet_ajustado(ticker, intervalo, ultima_iso, ajuste, incertidumbre=True):
-    serie = completas_hasta(ticker, intervalo, ultima_iso)["Close"]
-    return modelos_series.ajustar_prophet(serie, dict(ajuste), incertidumbre=incertidumbre)
-
-
 @st.cache_data(show_spinner=False, max_entries=12)
-def prediccion_siguiente(ticker, intervalo, ultima_iso, ajuste, version, _arts):
+def prediccion_siguiente(ticker, intervalo, ultima_iso, version, _arts):
     completas = completas_hasta(ticker, intervalo, ultima_iso)
-    modelo = prophet_ajustado(ticker, intervalo, ultima_iso, ajuste)
-    return prediccion.predecir_siguiente(completas, intervalo, _arts, modelo)
+    return prediccion.predecir_siguiente(completas, intervalo, _arts)
 
 
 @st.cache_data(show_spinner="Simulando las estrategias…", max_entries=24)
@@ -133,38 +130,19 @@ def cnn_actual(ticker, intervalo, ultima_iso, version, _arts):
 
 
 @st.cache_data(show_spinner="Pronosticando varias horas…", max_entries=24)
-def pronostico_varias_horas(ticker, intervalo, origen_iso, horas, ajuste, version, _arts):
+def pronostico_varias_horas(ticker, intervalo, origen_iso, horas, version, _arts):
     completas = completas_hasta(ticker, intervalo, origen_iso)
-    modelo = prophet_ajustado(ticker, intervalo, origen_iso, ajuste)
-    return varias_horas.pronosticar(completas, intervalo, horas, _arts, modelo)
+    return varias_horas.pronosticar(completas, intervalo, horas, _arts)
 
 
 @st.cache_data(show_spinner="Evaluando cada horizonte en las últimas sesiones (la primera vez tarda unos segundos)…",
                max_entries=12)
-def evaluacion_varias_horas(ticker, intervalo, ultima_iso, horas, sesiones, ajuste, version, _arts):
+def evaluacion_varias_horas(ticker, intervalo, ultima_iso, horas, sesiones, version, _arts):
     completas = completas_hasta(ticker, intervalo, ultima_iso)
     f = preparacion.construir_caracteristicas(completas)
     ultimo_origen = len(f) - 1 - horas
     posiciones = list(range(max(ultimo_origen - sesiones * datos.velas_por_dia(intervalo) + 1, 60), ultimo_origen + 1))
-    dias = f.index.normalize()
-
-    def prophet_para(j):
-        anteriores = np.flatnonzero(dias < dias[j])
-        return prophet_ajustado(ticker, intervalo, f.index[anteriores[-1]].isoformat(), ajuste, incertidumbre=False)
-
-    return varias_horas.errores_por_horizonte(completas, horas, posiciones, _arts, prophet_para)
-
-
-@st.cache_data(show_spinner="Calculando pronóstico de Prophet…", max_entries=6)
-def pronostico_prophet(ticker, intervalo, ultima_iso, ajuste, sesiones=30, velas_futuras=14):
-    modelo = prophet_ajustado(ticker, intervalo, ultima_iso, ajuste)
-    df = completas_hasta(ticker, intervalo, ultima_iso)
-    ultimas = df.iloc[-sesiones * datos.velas_por_dia(intervalo):]
-    futuras = datos.proximas_velas(df.index[-1], intervalo, velas_futuras)
-    pronostico = modelos_series.pronosticar_prophet(modelo, ultimas.index.append(futuras))
-    pronostico["real"] = np.r_[ultimas["Close"].to_numpy(), np.full(len(futuras), np.nan)]
-    hora, semana = modelos_series.efectos_estacionales(modelo, intervalo)
-    return pronostico, hora, semana, len(futuras)
+    return varias_horas.errores_por_horizonte(completas, horas, posiciones, _arts)
 
 
 @st.cache_data(show_spinner="Calculando pruebas de estacionariedad…", max_entries=6)
@@ -198,19 +176,12 @@ def residuos_arima(ruta, version, rezagos=config.REZAGOS_ACF):
 
 
 @st.cache_data(show_spinner="Revisando cómo les fue a los modelos en la última sesión…", max_entries=6)
-def evaluacion_ultima_sesion(ticker, intervalo, ultima_iso, ajuste, version, _arts):
+def evaluacion_ultima_sesion(ticker, intervalo, ultima_iso, version, _arts):
     completas = completas_hasta(ticker, intervalo, ultima_iso)
     previas = completas[completas.index < completas.index[-1].normalize()]
     if previas.empty:
         return pd.DataFrame()
-    modelo_previo = prophet_ajustado(ticker, intervalo, previas.index[-1].isoformat(), ajuste)
-    return prediccion.evaluar_ultima_sesion(completas, intervalo, _arts, modelo_previo)
-
-
-def ajuste_prophet(arts):
-    """Hiperparámetros elegidos en el entrenamiento, como tupla para que sirvan de llave de caché."""
-    elegidos = arts["resumen"].get("prophet") if arts else None
-    return tuple(sorted(modelos_series.parametros_prophet(elegidos).items()))
+    return prediccion.evaluar_ultima_sesion(completas, intervalo, _arts)
 
 
 def tickers_con_modelos():
@@ -230,8 +201,8 @@ def prediccion_para(simbolo):
     if not arts_simbolo or df_simbolo.empty:
         return pd.DataFrame(), None, None
     ultima = datos.velas_completas(df_simbolo, INTERVALO).index[-1].isoformat()
-    tabla, info = prediccion_siguiente(simbolo, INTERVALO, ultima, ajuste_prophet(arts_simbolo),
-                                       arts_simbolo["resumen"]["entrenado_en"], arts_simbolo)
+    tabla, info = prediccion_siguiente(simbolo, INTERVALO, ultima, arts_simbolo["resumen"]["entrenado_en"],
+                                       arts_simbolo)
     return tabla, info, prediccion.consenso(tabla)
 
 
@@ -260,7 +231,7 @@ arts = artefactos_de(ticker)
 if arts:
     st.sidebar.success(f"Modelos entrenados el {arts['resumen']['entrenado_en']}")
 else:
-    st.sidebar.warning("Esta acción no tiene modelos entrenados. Por ahora solo se muestra Prophet.")
+    st.sidebar.warning("Esta acción no tiene modelos entrenados. Por ahora solo se muestran los precios.")
     st.sidebar.code(f"python entrenar.py --ticker {ticker}", language="bash")
 
 usuario = interfaz_cuenta.sesion()
@@ -282,9 +253,9 @@ if error_hora:
     st.warning(error_hora)
 ultima_iso = datos.velas_completas(df_hora, INTERVALO).index[-1].isoformat()
 
-(tab_vivo, tab_horas, tab_estrategias, tab_portafolio, tab_agente, tab_prophet, tab_serie, tab_eval, tab_datos,
+(tab_vivo, tab_horas, tab_estrategias, tab_portafolio, tab_agente, tab_serie, tab_eval, tab_datos,
  tab_mis_datos, tab_etica) = st.tabs(
-    ["En vivo y próxima hora", "Varias horas", "Estrategias", "Portafolio simulado", "Agente", "Prophet",
+    ["En vivo y próxima hora", "Varias horas", "Estrategias", "Portafolio simulado", "Agente",
      "Análisis de la serie", "Evaluación de modelos", "Datos recolectados", "Mis datos", "Ética"]
 )
 
@@ -302,8 +273,7 @@ def panel_vivo(ticker, arts):
     sesion = datos.ultima_sesion(df_2m)
     momento = datos.ahora_mercado()
 
-    modelo_prophet = prophet_ajustado(ticker, INTERVALO, completas.index[-1].isoformat(), ajuste_prophet(arts))
-    tabla, info = prediccion.predecir_siguiente(completas, INTERVALO, arts, modelo_prophet)
+    tabla, info = prediccion.predecir_siguiente(completas, INTERVALO, arts)
     voto = prediccion.consenso(tabla)
 
     precio_actual = float(sesion["Close"].iloc[-1]) if not sesion.empty else float(df_1h["Close"].iloc[-1])
@@ -370,10 +340,9 @@ def panel_vivo(ticker, arts):
                        "sus predicciones aparecen en el gráfico por hora de abajo. Cuando abra el mercado, esta vista "
                        "marcará la hora predicha y el precio que espera cada modelo.")
 
-    if arts or modelo_prophet is not None:
-        version = arts["resumen"]["entrenado_en"] if arts else None
-        revision = evaluacion_ultima_sesion(ticker, INTERVALO, completas.index[-1].isoformat(), ajuste_prophet(arts),
-                                            version, arts)
+    if arts:
+        version = arts["resumen"]["entrenado_en"]
+        revision = evaluacion_ultima_sesion(ticker, INTERVALO, completas.index[-1].isoformat(), version, arts)
         if not revision.empty:
             columnas_modelos = [c for c in revision.columns if es_modelo(c)]
             dia_revision = revision["vela"].iloc[0].tz_convert(config.ZONA_MERCADO)
@@ -471,8 +440,7 @@ with tab_horas:
         "Pronóstico **hora por hora** con el modelo ganador de cada tipo. AR, ARIMA, RNN y LSTM predicen la hora "
         "siguiente con su ventana de log-retornos; después esa predicción entra a la ventana como si fuera un dato "
         "real y se predice la hora que sigue, y así sucesivamente (**pronóstico recursivo**). El precio de cada hora "
-        "es el de la hora anterior multiplicado por e elevado al log-retorno predicho. Prophet no es recursivo: evalúa "
-        "su curva directamente en cada hora futura."
+        "es el de la hora anterior multiplicado por e elevado al log-retorno predicho."
     )
     st.latex(r"\hat r_{t+1} = f(r_t, r_{t-1}, \dots) \qquad \hat r_{t+2} = f(\hat r_{t+1}, r_t, \dots) \qquad "
              r"\hat r_{t+3} = f(\hat r_{t+2}, \hat r_{t+1}, r_t, \dots) \qquad \hat P_{t+h} = \hat P_{t+h-1}\, e^{\hat r_{t+h}}")
@@ -494,8 +462,7 @@ with tab_horas:
         origen = completas_tab.index[-1]
 
     version_modelos = arts["resumen"]["entrenado_en"] if arts else None
-    futuro, info_h = pronostico_varias_horas(ticker, INTERVALO, origen.isoformat(), horas, ajuste_prophet(arts),
-                                             version_modelos, arts)
+    futuro, info_h = pronostico_varias_horas(ticker, INTERVALO, origen.isoformat(), horas, version_modelos, arts)
     modelos_h = [c for c in futuro.columns if not c.startswith("banda")]
     previas_h = completas_tab[completas_tab.index <= origen].iloc[-3 * datos.velas_por_dia(INTERVALO):]
     reales_h = completas_tab[completas_tab.index > origen].iloc[:horas]
@@ -544,7 +511,7 @@ with tab_horas:
     if not reales_h.empty and len(reales_h) < horas:
         st.caption(f"Solo hay {len(reales_h)} horas reales después del origen; la comparación usa esas.")
 
-    recursivos = [m for m in modelos_h if m != "Prophet"]
+    recursivos = modelos_h
     if recursivos and arts:
         st.markdown("**Paso a paso del pronóstico recursivo**")
         modelo_paso = st.selectbox("Modelo", recursivos, key="modelo_paso_a_paso")
@@ -560,7 +527,7 @@ with tab_horas:
     st.markdown("**¿Qué tan rápido pierde precisión cada modelo al alejarse?**")
     if st.checkbox("Calcular el error promedio por horizonte en las últimas 10 sesiones"):
         error_h, acierto_h, n_origenes = evaluacion_varias_horas(ticker, INTERVALO, ultima_iso, horas, 10,
-                                                                 ajuste_prophet(arts), version_modelos, arts)
+                                                                 version_modelos, arts)
         medida = st.radio("Medida", ["Error medio del precio (%)", "Acierto de dirección (%)"], horizontal=True)
         tabla_medida = error_h if medida.startswith("Error") else acierto_h
         fig_e = go.Figure()
@@ -696,9 +663,9 @@ def clave_gemini():
 
 def contexto_agente():
     version_ag = arts["resumen"]["entrenado_en"] if arts else None
-    tabla_ag, info_ag = prediccion_siguiente(ticker, INTERVALO, ultima_iso, ajuste_prophet(arts), version_ag, arts)
+    tabla_ag, info_ag = prediccion_siguiente(ticker, INTERVALO, ultima_iso, version_ag, arts)
     futuro_ag, info_futuro_ag = pronostico_varias_horas(ticker, INTERVALO, ultima_iso, datos.velas_por_dia(INTERVALO),
-                                                        ajuste_prophet(arts), version_ag, arts)
+                                                        version_ag, arts)
     completas_ag = completas_hasta(ticker, INTERVALO, ultima_iso)
     _, tabla_est_ag = backtest_estrategias(ticker, INTERVALO, ultima_iso, config.COSTO_OPERACION_PCT, version_ag, arts)
     probabilidad_ag, _ = cnn_actual(ticker, INTERVALO, ultima_iso, version_ag, arts)
@@ -715,66 +682,7 @@ with tab_agente:
     interfaz_agente.pestana_agente(usuario, ticker, clave_gemini(), contexto_agente)
 
 
-# ------------------------------------------------------------------ pestaña 2: Prophet
-
-with tab_prophet:
-    with st.expander("¿Cómo funciona Prophet?", expanded=not arts):
-        st.markdown(r"""
-Prophet (de Meta; el paquete se llamaba `fbprophet` y hoy se instala como `prophet`) no mira los valores
-anteriores como hacen AR o una RNN. Modela la serie como una **suma de funciones del tiempo**:
-
-$$y(t) = g(t) + s(t) + h(t) + \varepsilon_t$$
-
-- **g(t), tendencia:** rectas por tramos. Prophet coloca posibles *puntos de cambio* donde la pendiente puede
-  cambiar; `changepoint_prior_scale` controla qué tan flexible es (valores altos = tendencia más nerviosa).
-- **s(t), estacionalidad:** sumas de senos y cosenos (series de Fourier). Aquí hay una diaria (efecto de la hora
-  del día) y una semanal (efecto del día de la semana).
-- **h(t), festivos:** efectos de fechas especiales (no se usan en este proyecto).
-- **ε, ruido:** lo que el modelo no explica.
-
-Se ajusta como una regresión sobre el tiempo. En este proyecto se modela **log(precio)**, así los efectos
-estacionales quedan en porcentaje. Para predecir, se evalúa la función en la hora futura.
-
-**Limitación:** el precio de una acción se comporta casi como una caminata aleatoria. Prophet capta la tendencia
-y los patrones por hora, pero no reacciona a lo que pasó en la última vela; por eso se compara con AR, RNN y LSTM.
-""")
-    ajuste = ajuste_prophet(arts)
-    pronostico, efecto_hora, efecto_semana, n_futuras = pronostico_prophet(ticker, INTERVALO, ultima_iso, ajuste)
-    historia, futuro = pronostico.iloc[:-n_futuras], pronostico.iloc[-n_futuras:]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=pronostico["ds"], y=pronostico["yhat_upper_precio"], mode="lines",
-                             line=dict(width=0), showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=pronostico["ds"], y=pronostico["yhat_lower_precio"], mode="lines",
-                             line=dict(width=0), fill="tonexty", fillcolor="rgba(235,104,52,0.15)",
-                             name="Intervalo del 80%", hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=historia["ds"], y=historia["real"], mode="markers", name="Precio real",
-                             marker=dict(color=COLOR_REAL, size=5)))
-    fig.add_trace(go.Scatter(x=historia["ds"], y=historia["yhat_precio"], mode="lines", name="Ajuste de Prophet",
-                             line=dict(color=COLORES_MODELO["Prophet"], width=2)))
-    fig.add_trace(go.Scatter(x=futuro["ds"], y=futuro["yhat_precio"], mode="lines+markers", name="Pronóstico",
-                             line=dict(color=COLORES_MODELO["Prophet"], width=2, dash="dot"), marker=dict(size=8)))
-    st.plotly_chart(estilo(fig, alto=450, titulo=f"Prophet: últimas 30 sesiones y próximas {n_futuras} horas "
-                                                  f"({', '.join(f'{k} = {v}' for k, v in ajuste)})"),
-                    key="prophet_pronostico")
-
-    c1, c2, c3 = st.columns(3)
-    fig_t = go.Figure(go.Scatter(x=historia["ds"], y=historia["trend_precio"], mode="lines", name="Tendencia",
-                                 line=dict(color=COLORES_MODELO["Prophet"], width=2)))
-    c1.plotly_chart(estilo(fig_t, alto=300, titulo="Tendencia g(t)"), key="prophet_tendencia")
-    fig_d = go.Figure(go.Bar(x=efecto_hora["hora"], y=efecto_hora["efecto_pct"], marker_color=COLORES_MODELO["Prophet"],
-                             name="Efecto"))
-    fig_d.update_yaxes(ticksuffix="%")
-    c2.plotly_chart(estilo(fig_d, alto=300, titulo="Estacionalidad diaria (hora NY)", saltos=False), key="prophet_diaria")
-    fig_s = go.Figure(go.Bar(x=efecto_semana["dia"], y=efecto_semana["efecto_pct"], marker_color=COLORES_MODELO["Prophet"],
-                             name="Efecto"))
-    fig_s.update_yaxes(ticksuffix="%")
-    c3.plotly_chart(estilo(fig_s, alto=300, titulo="Estacionalidad semanal", saltos=False), key="prophet_semanal")
-    st.caption("Las barras muestran cuánto sube o baja el precio, en promedio, por la hora del día o el día de la semana "
-               "según Prophet. Si los efectos son muy pequeños, la estacionalidad aporta poco a la predicción.")
-
-
-# ------------------------------------------------------------------ pestaña 3: análisis de la serie
+# ------------------------------------------------------------------ pestaña 2: análisis de la serie
 
 VELAS_SESION = datos.velas_por_dia(INTERVALO)
 
@@ -782,7 +690,7 @@ VELAS_SESION = datos.velas_por_dia(INTERVALO)
 def grafico_correlacion(valores, n, titulo, clave, columna):
     """Barras de una ACF o PACF con la franja del 95%; los rezagos múltiplos de una sesión van en otro color."""
     rezagos = np.arange(1, len(valores) + 1)
-    colores = [COLORES_MODELO["Prophet"] if k % VELAS_SESION == 0 else COLOR_REAL for k in rezagos]
+    colores = [COLOR_ACENTO if k % VELAS_SESION == 0 else COLOR_REAL for k in rezagos]
     fig_c = go.Figure(go.Bar(x=rezagos, y=valores, marker_color=colores))
     banda = 1.96 / np.sqrt(n)
     for signo in (1, -1):
@@ -1018,7 +926,7 @@ with tab_serie:
             fig_raiz = go.Figure(go.Scatter(x=np.cos(angulo), y=np.sin(angulo), mode="lines", name="Círculo unitario",
                                             line=dict(color=COLOR_REFERENCIA, dash="dash"), hoverinfo="skip"))
             for polinomio, raices, color in (("AR", arima["raices_ar"], COLORES_MODELO["ARIMA"]),
-                                             ("MA", arima["raices_ma"], COLORES_MODELO["Prophet"])):
+                                             ("MA", arima["raices_ma"], COLOR_ACENTO)):
                 if raices:
                     inversas = 1 / np.array([complex(real, imaginaria) for real, imaginaria in raices])
                     fig_raiz.add_trace(go.Scatter(x=inversas.real, y=inversas.imag, mode="markers",
@@ -1068,7 +976,7 @@ with tab_serie:
                        "franja indican que el modelo ya recogió la autocorrelación del log-retorno.")
 
 
-# ------------------------------------------------------------------ pestaña 4: evaluación
+# ------------------------------------------------------------------ pestaña 3: evaluación
 
 with tab_eval:
     if not arts:
@@ -1085,8 +993,7 @@ with tab_eval:
             st.markdown(f"AR y redes eligen sus hiperparámetros con **validación cruzada temporal** "
                         f"(`TimeSeriesSplit`, {cv['pliegues']} pliegues) sobre entrenamiento + validación. "
                         "ARIMA elige p y q sobre ese mismo tramo con los **requisitos de Box-Jenkins** (raíces, coeficientes "
-                        "significativos y residuos), con el AIC para desempatar. "
-                        "Prophet usa el tramo de validación, porque cada pliegue le exigiría decenas de ajustes más.")
+                        "significativos y residuos), con el AIC para desempatar.")
             st.dataframe(pd.DataFrame(cv["tramos"]).rename_axis("pliegue").reset_index()
                          .assign(pliegue=lambda d: d["pliegue"] + 1), hide_index=True)
 
@@ -1115,7 +1022,7 @@ with tab_eval:
                         key="eval_acierto")
         st.caption("Un modelo solo aporta si su acierto supera a las líneas base (gris) por más que el margen de error. "
                    "Si las barras de error se cruzan con el 50% o con 'Siempre sube', no hay evidencia de que prediga "
-                   "mejor que el azar. AR, ARIMA, Prophet, RNN y LSTM predicen el log-retorno (regresión) y aciertan cuando "
+                   "mejor que el azar. AR, ARIMA, RNN y LSTM predicen el log-retorno (regresión) y aciertan cuando "
                    "su signo coincide con el del retorno real; la CNN de velas clasifica directamente (acierta cuando "
                    "da más de 50% y la hora sube, o menos de 50% y baja), por eso no tiene error del precio.")
 
@@ -1152,7 +1059,7 @@ with tab_eval:
                 fig_h.add_trace(go.Scatter(x=historial["epoca"] + 1, y=historial["loss"], name="Entrenamiento",
                                            line=dict(color=COLOR_REAL, width=2)))
                 fig_h.add_trace(go.Scatter(x=historial["epoca"] + 1, y=historial["val_loss"], name="Validación",
-                                           line=dict(color=COLORES_MODELO["Prophet"], width=2)))
+                                           line=dict(color=COLOR_ACENTO, width=2)))
             fig_h.update_xaxes(title="Época")
             fig_h.update_yaxes(title=eje_y)
             columna.plotly_chart(estilo(fig_h, alto=340, titulo=titulo, saltos=False), key=clave)
@@ -1184,14 +1091,13 @@ with tab_eval:
                                 ("busqueda_lstm.csv", "Búsqueda de hiperparámetros: LSTM"),
                                 ("busqueda_cnn.csv", f"Búsqueda de hiperparámetros: {velas_cnn.NOMBRE}"),
                                 ("busqueda_ar.csv", "Selección de p para AR(p)"),
-                                ("busqueda_arima.csv", "Selección de p y q para ARIMA (requisitos y AIC)"),
-                                ("busqueda_prophet.csv", "Búsqueda de hiperparámetros: Prophet")):
+                                ("busqueda_arima.csv", "Selección de p y q para ARIMA (requisitos y AIC)")):
             if (carpeta / archivo).exists():
                 with st.expander(titulo):
                     st.dataframe(pd.read_csv(carpeta / archivo), hide_index=True)
 
 
-# ------------------------------------------------------------------ pestaña 5: datos
+# ------------------------------------------------------------------ pestaña 4: datos
 
 with tab_datos:
     st.markdown(

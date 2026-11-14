@@ -1,4 +1,4 @@
-"""Entrena y evalúa AR(p), ARIMA(p, d, q), Prophet, RNN, LSTM y la CNN de velas para una acción.
+"""Entrena y evalúa AR(p), ARIMA(p, d, q), RNN, LSTM y la CNN de velas para una acción.
 
 Uso:
     python entrenar.py                         # AAPL con velas de 1 hora
@@ -31,8 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description="Entrenamiento de modelos de predicción de acciones")
     parser.add_argument("--ticker", default=config.TICKER_POR_DEFECTO)
     parser.add_argument("--intervalo", default=config.INTERVALO_MODELO)
-    parser.add_argument("--rapido", action="store_true", help="rejilla pequeña y Prophet sin búsqueda")
-    parser.add_argument("--sin-prophet", action="store_true")
+    parser.add_argument("--rapido", action="store_true", help="rejilla pequeña, para probar que todo funciona")
     parser.add_argument("--sin-descarga", action="store_true", help="usar solo los datos ya guardados")
     args = parser.parse_args()
     ticker, intervalo = args.ticker.upper(), args.intervalo
@@ -95,7 +94,7 @@ def main():
     salida = config.directorio_modelos(ticker, intervalo)
     salida.mkdir(parents=True, exist_ok=True)
 
-    print("\n[1/6] AR(p) sobre log-retornos")
+    print("\n[1/5] AR(p) sobre log-retornos")
     p, modelo_ar, tabla_ar = modelos_series.buscar_ar(f, cortes, k=k)
     pred_ar = modelos_series.predecir_ar(modelo_ar, f, p, a, b)
     predicciones[f"AR({p})"] = pred_ar
@@ -104,7 +103,7 @@ def main():
     tabla_ar.to_csv(salida / "busqueda_ar.csv", index=False)
     print(f"  p elegido = {p}")
 
-    print("\n[2/6] ARIMA(p, d, q) con la metodología de Box-Jenkins")
+    print("\n[2/5] ARIMA(p, d, q) con la metodología de Box-Jenkins")
     log_precio_desarrollo = np.log(f["cierre"].to_numpy(dtype=float)[: cortes.fin_validacion + 1])
     d, pasos_adf = modelos_series.orden_integracion(log_precio_desarrollo)
     for paso in pasos_adf:
@@ -141,33 +140,11 @@ def main():
     print(f"  elegido: {arima['nombre']}, cumple {arima['requisitos_cumplidos']} de 5 requisitos "
           "(desempate por AIC)")
 
-    if not args.sin_prophet:
-        print("\n[3/6] Prophet sobre log(precio)")
-        if args.rapido:
-            parametros = modelos_series.parametros_prophet()
-            dias = config.PROPHET_DIAS_ENTRE_REAJUSTES_VALIDACION
-        else:
-            print("  búsqueda de hiperparámetros:")
-
-            def informar_prophet(numero, total, fila):
-                print(f"  {numero:>2}/{total} changepoint_prior_scale={fila['changepoint_prior_scale']:<5} "
-                      f"seasonality_prior_scale={fila['seasonality_prior_scale']:<5} -> mse_val={fila['mse_validacion']:.3e}")
-
-            parametros, tabla_prophet = modelos_series.buscar_prophet(f, cortes, intervalo, al_terminar=informar_prophet)
-            tabla_prophet.to_csv(salida / "busqueda_prophet.csv", index=False)
-            dias = config.PROPHET_DIAS_ENTRE_REAJUSTES_PRUEBA
-        cada = datos.velas_por_dia(intervalo) * dias
-        pred_prophet = modelos_series.backtest_prophet(f, a, b, parametros, cada)
-        predicciones["Prophet"] = pred_prophet
-        filas_metricas.append(evaluacion.metricas("Prophet", r_real, cierre_actual, r_pred=pred_prophet))
-        resumen["prophet"] = {**parametros, "reajuste_cada_velas": cada}
-        print("  elegido: " + ", ".join(f"{k} = {v}" for k, v in parametros.items()))
-
     rejilla = config.REJILLA_REDES_RAPIDA if args.rapido else config.REJILLA_REDES
     resumen["redes"] = {}
-    for paso, tipo in ((4, "rnn"), (5, "lstm")):
+    for paso, tipo in ((3, "rnn"), (4, "lstm")):
         nombre = modelos_redes.TIPOS[tipo]
-        print(f"\n[{paso}/6] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
+        print(f"\n[{paso}/5] {nombre}: búsqueda de hiperparámetros (optimizador {config.OPTIMIZADOR})")
 
         def informar(numero, total, fila):
             print(f"  {numero:>2}/{total} ventana={fila['ventana']:<3} unidades={fila['unidades']:<3} "
@@ -189,7 +166,7 @@ def main():
         tabla.to_csv(salida / f"busqueda_{tipo}.csv", index=False)
         resumen["redes"][tipo] = {**mejor["fila"], "optimizador": config.OPTIMIZADOR}
 
-    print(f"\n[6/6] {velas_cnn.NOMBRE}: clasificación de imágenes de velas (optimizador {config.OPTIMIZADOR})")
+    print(f"\n[5/5] {velas_cnn.NOMBRE}: clasificación de imágenes de velas (optimizador {config.OPTIMIZADOR})")
 
     def informar_cnn(numero, total, fila):
         print(f"  {numero:>2}/{total} velas={fila['velas']:<3} filtros={fila['filtros']:<3} tasa={fila['tasa']} "

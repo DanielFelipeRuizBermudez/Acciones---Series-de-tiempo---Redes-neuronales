@@ -1,7 +1,7 @@
 """Pronóstico a varias velas (horas) con los modelos ganadores.
 
 AR, ARIMA, RNN y LSTM se usan de forma recursiva: cada predicción se agrega a la historia y sirve de entrada
-para la siguiente. Prophet evalúa directamente su función del tiempo en las horas futuras.
+para la siguiente.
 """
 
 import numpy as np
@@ -54,11 +54,9 @@ def _recorridos_red(modelo, escalado, ventana, f, posiciones, horizonte):
     return salida
 
 
-def precios_futuros(f, posiciones, marcas, horizonte, artefactos=None, modelos_prophet=None):
+def precios_futuros(f, posiciones, horizonte, artefactos=None):
     """Precio predicho por cada modelo en las `horizonte` velas que siguen a cada origen.
 
-    `marcas[i]` son las horas futuras del origen `posiciones[i]`; `modelos_prophet[i]` es un Prophet
-    ajustado solo con datos hasta ese origen (o None para omitir Prophet).
     Devuelve {nombre_modelo: matriz orígenes × horizonte}.
     """
     cierre = f["cierre"].to_numpy(dtype=float)[posiciones][:, None]
@@ -71,11 +69,6 @@ def precios_futuros(f, posiciones, marcas, horizonte, artefactos=None, modelos_p
             arima = artefactos["resumen"]["arima"]
             r = modelos_series.predecir_arima(arima, f["log_ret"].to_numpy(dtype=float), posiciones, horizonte)
             resultado[arima["nombre"]] = cierre * np.exp(np.cumsum(r, axis=1))
-    if modelos_prophet is not None and all(m is not None for m in modelos_prophet):
-        resultado["Prophet"] = np.stack([
-            modelos_series.pronosticar_prophet(modelo, marca)["yhat_precio"].to_numpy()
-            for modelo, marca in zip(modelos_prophet, marcas)
-        ])
     if artefactos is not None:
         for tipo, modelo in artefactos["redes"].items():
             ventana = artefactos["resumen"]["redes"][tipo]["ventana"]
@@ -93,13 +86,12 @@ def banda_caminata_aleatoria(f, posicion, horizonte, velas_volatilidad=500):
     return cierre * np.exp(-Z_80 * sigma * np.sqrt(h)), cierre * np.exp(Z_80 * sigma * np.sqrt(h)), sigma
 
 
-def pronosticar(df_completas, intervalo, horizonte, artefactos=None, modelo_prophet=None):
+def pronosticar(df_completas, intervalo, horizonte, artefactos=None):
     """Pronóstico desde la última vela de `df_completas`. Devuelve (tabla por hora futura, info del origen)."""
     f = preparacion.construir_caracteristicas(df_completas)
     posicion = len(f) - 1
     marcas = datos.proximas_velas(f.index[-1], intervalo, horizonte)
-    precios = precios_futuros(f, [posicion], [marcas], horizonte, artefactos,
-                              [modelo_prophet] if modelo_prophet is not None else None)
+    precios = precios_futuros(f, [posicion], horizonte, artefactos)
     tabla = pd.DataFrame({nombre: valores[0] for nombre, valores in precios.items()}, index=marcas)
     baja, alta, sigma = banda_caminata_aleatoria(f, posicion, horizonte)
     tabla["banda_baja"], tabla["banda_alta"] = baja, alta
@@ -108,17 +100,14 @@ def pronosticar(df_completas, intervalo, horizonte, artefactos=None, modelo_prop
     return tabla, info
 
 
-def errores_por_horizonte(df_completas, horizonte, posiciones, artefactos=None, prophet_para=None):
+def errores_por_horizonte(df_completas, horizonte, posiciones, artefactos=None):
     """Error y acierto de dirección promedio a 1, 2, ..., `horizonte` velas, sobre varios orígenes.
 
-    Solo se usan orígenes con `horizonte` velas reales después. `prophet_para(j)` debe devolver un
-    Prophet ajustado únicamente con datos anteriores al origen j.
+    Solo se usan orígenes con `horizonte` velas reales después.
     """
     f = preparacion.construir_caracteristicas(df_completas)
     posiciones = [j for j in posiciones if j + horizonte < len(f)]
-    marcas = [f.index[j + 1: j + 1 + horizonte] for j in posiciones]
-    modelos = [prophet_para(j) for j in posiciones] if prophet_para else None
-    precios = precios_futuros(f, posiciones, marcas, horizonte, artefactos, modelos)
+    precios = precios_futuros(f, posiciones, horizonte, artefactos)
     cierre = f["cierre"].to_numpy(dtype=float)
     origen = cierre[posiciones][:, None]
     real = np.stack([cierre[j + 1: j + 1 + horizonte] for j in posiciones])

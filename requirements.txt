@@ -1,5 +1,4 @@
 yfinance>=0.2.54
-prophet>=1.1.5
 tensorflow>=2.16
 streamlit>=1.40
 plotly>=5.20

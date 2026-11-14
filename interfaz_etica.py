@@ -8,7 +8,7 @@ PRINCIPIOS = {
         "color": "#1baf7a",
         "idea": "Hacer un bien concreto: enseñar a leer modelos y mercados sin arriesgar dinero.",
         "controles": [
-            ("Explicación de cada modelo y de la serie dentro de la app", "Prophet, Análisis de la serie y Evaluación de modelos"),
+            ("Explicación de cada modelo y de la serie dentro de la app", "Análisis de la serie, Varias horas y Evaluación de modelos"),
             ("Portafolio con 10.000 USD ficticios para aprender a invertir sin riesgo", "Portafolio simulado"),
             ("Comparación del portafolio con comprar y mantener y con el consenso de los modelos", "Portafolio simulado"),
             ("Agente que explica en lenguaje claro los datos que calcula la app", "Agente"),
@@ -88,6 +88,8 @@ PRINCIPIOS = {
             ("Registro de cada recuperación de la cuenta y del uso de la llave de emergencia, visible para el titular",
              "Mis datos"),
             ("Aviso de cambio de política con las novedades, en la barra lateral y en Mis datos", "Barra lateral y Mis datos"),
+            ("Aviso al correo de cada inicio de sesión, para que el titular note un acceso que no hizo",
+             "Correo del titular"),
         ],
     },
 }
@@ -122,7 +124,7 @@ def diagrama():
         "usuario": ("Usuario", ["navegador"], []),
         "front": ("Front: Streamlit", ["HTTPS, 11 pestañas", "aviso de privacidad y política"],
                   ["Transparencia", "Beneficencia"]),
-        "modelos": ("Modelos", ["AR, ARIMA, Prophet", "RNN, LSTM, CNN", "evaluación con margen de error"],
+        "modelos": ("Modelos", ["AR y ARIMA", "RNN, LSTM, CNN", "evaluación con margen de error"],
                     ["Beneficencia", "Transparencia"]),
         "cuentas": ("Cuentas y privacidad", ["llaves RSA + AES por usuario", "solicitudes con permiso",
                                              "recuperación y break-glass"],
@@ -134,7 +136,7 @@ def diagrama():
         "neon": ("Neon (Postgres)", ["solo datos cifrados", "token aleatorio"], ["No maleficencia"]),
         "yahoo": ("Yahoo Finance", ["precios públicos"], []),
         "gemini": ("Google Gemini", ["solo preguntas anonimizadas"], ["No maleficencia"]),
-        "gmail": ("Gmail", ["solo el código de recuperación"], ["No maleficencia"]),
+        "gmail": ("Gmail", ["código de recuperación", "aviso de inicio de sesión"], ["No maleficencia", "Transparencia"]),
         "emergencia": ("Llave de emergencia", ["fuera de la app", "archivo + frase del admin"],
                        ["No maleficencia", "Autonomía"]),
     }
@@ -149,7 +151,7 @@ def diagrama():
                                    ("front", "portafolio", ""), ("front", "agente", ""),
                                    ("modelos", "yahoo", "descarga"), ("cuentas", "neon", "TLS"),
                                    ("portafolio", "neon", "TLS"), ("agente", "gemini", "anonimizado"),
-                                   ("cuentas", "gmail", "código"), ("emergencia", "cuentas", "solo al romper el vidrio")]:
+                                   ("cuentas", "gmail", "código y avisos"), ("emergencia", "cuentas", "solo al romper el vidrio")]:
         lineas.append(f'{origen} -> {destino} [label="{texto}"];')
     lineas.append("}")
     return "\n".join(lineas)

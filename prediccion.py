@@ -50,7 +50,7 @@ def _fila(modelo, cierre, retorno):
     }
 
 
-def predecir_siguiente(df_completas, intervalo, artefactos=None, modelo_prophet=None):
+def predecir_siguiente(df_completas, intervalo, artefactos=None):
     """Predice la vela que sigue a la última vela completa.
 
     Devuelve (tabla_de_predicciones, info) donde info trae la vela de referencia y la vela objetivo.
@@ -70,11 +70,6 @@ def predecir_siguiente(df_completas, intervalo, artefactos=None, modelo_prophet=
             retorno_arima = float(modelos_series.predecir_arima(resumen["arima"], retornos, [len(retornos) - 1])[0, 0])
             filas.append(_fila(resumen["arima"]["nombre"], cierre, retorno_arima))
 
-    if modelo_prophet is not None:
-        pronostico = modelos_series.pronosticar_prophet(modelo_prophet, [objetivo])
-        retorno_prophet = float(np.log(pronostico["yhat_precio"].iloc[0] / cierre))
-        filas.append(_fila("Prophet", cierre, retorno_prophet))
-
     if artefactos is not None:
         escalado = artefactos["escalado"]
         x_escalado = escalado.transformar_x(f)
@@ -89,15 +84,12 @@ def predecir_siguiente(df_completas, intervalo, artefactos=None, modelo_prophet=
     return tabla, info
 
 
-def evaluar_ultima_sesion(completas, intervalo, artefactos=None, modelo_prophet_previo=None):
-    """Lo que cada modelo habría predicho para cada vela de la última sesión, usando solo datos anteriores a ella.
-
-    `modelo_prophet_previo` debe estar ajustado con datos hasta antes de la sesión.
-    """
+def evaluar_ultima_sesion(completas, intervalo, artefactos=None):
+    """Lo que cada modelo habría predicho para cada vela de la última sesión, usando solo datos anteriores a ella."""
     dia = completas.index[-1].normalize()
     filas = []
     for j in np.flatnonzero(completas.index >= dia):
-        tabla, info = predecir_siguiente(completas.iloc[:j], intervalo, artefactos, modelo_prophet_previo)
+        tabla, info = predecir_siguiente(completas.iloc[:j], intervalo, artefactos)
         cierre_real = float(completas["Close"].iloc[j])
         fila = {
             "vela": completas.index[j],

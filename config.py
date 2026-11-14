@@ -4,6 +4,10 @@ RAIZ = Path(__file__).resolve().parent
 DIR_DATOS = RAIZ / "datos"
 DIR_MODELOS = RAIZ / "modelos_entrenados"
 DIR_BASE_LOCAL = RAIZ / "base_datos"
+DIR_RECURSOS = RAIZ / "recursos"
+LOGO = DIR_RECURSOS / "logo.png"
+ICONO = DIR_RECURSOS / "icono.png"
+LOGO_CORREO = DIR_RECURSOS / "logo_correo.png"
 RUTA_BASE_LOCAL = DIR_BASE_LOCAL / "usuarios.db"
 RUTA_CLAVE_LOCAL = DIR_BASE_LOCAL / "clave_local.txt"
 
@@ -43,14 +47,6 @@ ARIMA_MAX_Q_RAPIDO = 1
 LJUNG_BOX_REZAGOS = [14, 21]
 DISTANCIA_RAICES_COMUNES = 0.05
 
-PROPHET_REJILLA = {
-    "changepoint_prior_scale": [0.01, 0.05, 0.3],
-    "seasonality_prior_scale": [0.1, 1.0, 10.0],
-}
-PROPHET_PARAMETROS_POR_DEFECTO = {"changepoint_prior_scale": 0.05, "seasonality_prior_scale": 10.0}
-PROPHET_DIAS_ENTRE_REAJUSTES_VALIDACION = 5
-PROPHET_DIAS_ENTRE_REAJUSTES_PRUEBA = 1
-
 REJILLA_REDES = {
     "ventana": [7, 14, 35],
     "unidades": [32, 64],
@@ -86,7 +82,7 @@ VELAS_POR_ANO = 7 * 252
 
 GEMINI_MODELOS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
-NOMBRE_APP = "Predicción de acciones"
+NOMBRE_APP = "DAESA"
 CORREO_CONTACTO = "acciones1stdg2appr3espd@gmail.com"
 RESPONSABLE_CONSULTAS = "Daniel Ruiz"
 VERSION_POLITICA = "2026-11-09"
