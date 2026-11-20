@@ -1,26 +1,26 @@
 {
   "ticker": "AAPL",
   "intervalo": "1h",
-  "entrenado_en": "2026-11-18 21:51",
+  "entrenado_en": "2026-11-19 21:40",
   "caracteristicas": [
     "log_ret"
   ],
-  "velas": 3661,
+  "velas": 3668,
   "tramos": {
     "entrenamiento": {
       "desde": "2024-10-11 15:30",
-      "hasta": "2026-04-07 15:30",
-      "velas": 2562
+      "hasta": "2026-04-08 13:30",
+      "velas": 2567
     },
     "validacion": {
-      "desde": "2026-04-08 09:30",
-      "hasta": "2026-07-30 11:30",
-      "velas": 549
+      "desde": "2026-04-08 14:30",
+      "hasta": "2026-07-31 10:30",
+      "velas": 550
     },
     "prueba": {
-      "desde": "2026-07-30 12:30",
-      "hasta": "2026-11-18 14:30",
-      "velas": 549
+      "desde": "2026-07-31 11:30",
+      "hasta": "2026-11-19 14:30",
+      "velas": 550
     }
   },
   "validacion_cruzada": {
@@ -29,25 +29,25 @@
       {
         "entrena_hasta": "2025-03-27 11:30",
         "valida_desde": "2025-03-27 12:30",
-        "valida_hasta": "2025-09-05 15:30"
+        "valida_hasta": "2025-09-08 10:30"
       },
       {
-        "entrena_hasta": "2025-09-05 15:30",
-        "valida_desde": "2025-09-08 09:30",
-        "valida_hasta": "2026-02-19 11:30"
+        "entrena_hasta": "2025-09-08 10:30",
+        "valida_desde": "2025-09-08 11:30",
+        "valida_hasta": "2026-02-19 15:30"
       },
       {
-        "entrena_hasta": "2026-02-19 11:30",
-        "valida_desde": "2026-02-19 12:30",
-        "valida_hasta": "2026-07-30 11:30"
+        "entrena_hasta": "2026-02-19 15:30",
+        "valida_desde": "2026-02-20 09:30",
+        "valida_hasta": "2026-07-31 10:30"
       }
     ]
   },
   "ar": {
     "p": 1,
-    "intercepto": 0.00011752618107806618,
+    "intercepto": 8.640737588338123e-05,
     "coeficientes": [
-      0.03362625231033444
+      0.03251103699488418
     ]
   },
   "arima": {
@@ -56,24 +56,24 @@
     "q": 0,
     "nombre": "ARIMA(0,1,0)",
     "escala": 100.0,
-    "constante": 0.011982101706259912,
+    "constante": 0.008757461048325659,
     "ar": [],
     "ma": [],
-    "sigma2": 0.4417509960323381,
-    "aic": 6292.92640394189,
-    "bic": 6305.012445712487,
+    "sigma2": 0.4717750480785106,
+    "aic": 6510.13899031915,
+    "bic": 6522.228884418386,
     "raices_ar": [],
     "raices_ma": [],
     "raices_casi_comunes": false,
     "coeficientes": [
       {
         "parametro": "const",
-        "estimacion": 0.011982101706259912,
-        "error_estandar": 0.011914282890403412,
-        "z": 1.0056922280996976,
-        "p_valor": 0.3145636429107298,
-        "ic_bajo": -0.011369892758930777,
-        "ic_alto": 0.0353340961714506,
+        "estimacion": 0.008757461048325659,
+        "error_estandar": 0.01230077778017967,
+        "z": 0.7119436839544095,
+        "p_valor": 0.4764996498337155,
+        "ic_bajo": -0.015352063400826494,
+        "ic_alto": 0.03286698549747781,
         "significativo": false
       }
     ],
@@ -93,57 +93,57 @@
       "ljung_box": [
         {
           "rezagos": 14,
-          "estadistico": 20.15818958926198,
-          "p_valor": 0.12523243520095653
+          "estadistico": 19.991652832237225,
+          "p_valor": 0.13040480787213768
         },
         {
           "rezagos": 21,
-          "estadistico": 57.005895488893096,
-          "p_valor": 3.586139978571187e-05
+          "estadistico": 53.197219564330545,
+          "p_valor": 0.00012885911254988217
         }
       ],
       "jarque_bera": {
-        "estadistico": 52523.23766783555,
+        "estadistico": 121388.0397943129,
         "p_valor": 0.0,
-        "asimetria": -0.47990469894040066,
-        "curtosis": 23.10329066326546
+        "asimetria": -1.3497023880831458,
+        "curtosis": 33.447763635627176
       }
     },
     "integracion": [
       {
         "d": 0,
         "serie": "ln(precio)",
-        "estadistico": -0.6796177093163944,
-        "p_valor": 0.8519586109354272,
+        "estadistico": -1.250835340206959,
+        "p_valor": 0.6513546020922392,
         "rezagos": 20,
-        "n": 3091,
-        "critico_5": -2.862475514064715,
+        "n": 3097,
+        "critico_5": -2.8624737007762513,
         "estacionaria": false
       },
       {
         "d": 1,
         "serie": "Δ ln(precio) = log-retorno",
-        "estadistico": -12.760168159151599,
-        "p_valor": 8.175839989507493e-24,
+        "estadistico": -12.263070662644202,
+        "p_valor": 8.987133525975592e-23,
         "rezagos": 19,
-        "n": 3091,
-        "critico_5": -2.862475514064715,
+        "n": 3097,
+        "critico_5": -2.8624737007762513,
         "estacionaria": true
       }
     ]
   },
   "redes": {
     "rnn": {
-      "ventana": 7,
-      "unidades": 64,
-      "capas": 1,
+      "ventana": 35,
+      "unidades": 32,
+      "capas": 2,
       "dropout": 0.2,
-      "tasa": 0.01,
-      "rmse_cv_pct": 0.6770851765388205,
-      "desv_pliegues_pct": 0.13086123880647957,
-      "epocas_promedio": 5.666666666666667,
-      "parametros": 4289,
-      "epocas_finales": 6,
+      "tasa": 0.1,
+      "rmse_cv_pct": 0.7036536647241731,
+      "desv_pliegues_pct": 0.13098517130298865,
+      "epocas_promedio": 16.666666666666668,
+      "parametros": 3201,
+      "epocas_finales": 17,
       "optimizador": "SGD"
     },
     "lstm": {
@@ -152,11 +152,11 @@
       "capas": 1,
       "dropout": 0.2,
       "tasa": 0.1,
-      "rmse_cv_pct": 0.6752595163677773,
-      "desv_pliegues_pct": 0.1298818036301449,
-      "epocas_promedio": 24.0,
+      "rmse_cv_pct": 0.7036857877411091,
+      "desv_pliegues_pct": 0.13116258660170171,
+      "epocas_promedio": 25.666666666666668,
       "parametros": 16961,
-      "epocas_finales": 24,
+      "epocas_finales": 26,
       "optimizador": "SGD"
     }
   },
@@ -165,11 +165,11 @@
     "filtros": 32,
     "tasa": 0.01,
     "dropout": 0.2,
-    "perdida_cv": 0.6920490066210429,
-    "desv_pliegues": 0.0015434789081506949,
-    "acierto_cv_pct": 51.17975274721781,
-    "epocas_promedio": 9.0,
-    "epocas_finales": 9,
+    "perdida_cv": 0.6925775210062662,
+    "desv_pliegues": 0.0009011733722822389,
+    "acierto_cv_pct": 50.919983784357704,
+    "epocas_promedio": 6.666666666666667,
+    "epocas_finales": 7,
     "optimizador": "SGD",
     "alto": 40,
     "ancho_vela": 4
