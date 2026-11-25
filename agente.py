@@ -112,7 +112,7 @@ def responder(api_key, modelo, contexto, historial, pregunta):
         model=f"gemini/{modelo}",
         messages=mensajes_para_el_modelo(contexto, historial, pregunta),
         api_key=api_key,
-        temperature=0.3,
+       
         timeout=60,
         num_retries=1,
     )
