@@ -1,26 +1,26 @@
 {
   "ticker": "AAPL",
   "intervalo": "1h",
-  "entrenado_en": "2026-11-24 23:38",
+  "entrenado_en": "2026-11-25 22:49",
   "caracteristicas": [
     "log_ret"
   ],
-  "velas": 3689,
+  "velas": 3696,
   "tramos": {
     "entrenamiento": {
       "desde": "2024-10-11 15:30",
-      "hasta": "2026-04-10 14:30",
-      "velas": 2582
+      "hasta": "2026-04-13 12:30",
+      "velas": 2587
     },
     "validacion": {
-      "desde": "2026-04-10 15:30",
-      "hasta": "2026-08-04 14:30",
-      "velas": 553
+      "desde": "2026-04-13 13:30",
+      "hasta": "2026-08-05 13:30",
+      "velas": 554
     },
     "prueba": {
-      "desde": "2026-08-04 15:30",
-      "hasta": "2026-11-24 14:30",
-      "velas": 553
+      "desde": "2026-08-05 14:30",
+      "hasta": "2026-11-25 14:30",
+      "velas": 554
     }
   },
   "validacion_cruzada": {
@@ -29,25 +29,25 @@
       {
         "entrena_hasta": "2025-03-28 10:30",
         "valida_desde": "2025-03-28 11:30",
-        "valida_hasta": "2025-09-09 13:30"
+        "valida_hasta": "2025-09-09 15:30"
       },
       {
-        "entrena_hasta": "2025-09-09 13:30",
-        "valida_desde": "2025-09-09 14:30",
-        "valida_hasta": "2026-02-23 15:30"
+        "entrena_hasta": "2025-09-09 15:30",
+        "valida_desde": "2025-09-10 09:30",
+        "valida_hasta": "2026-02-24 12:30"
       },
       {
-        "entrena_hasta": "2026-02-23 15:30",
-        "valida_desde": "2026-02-24 09:30",
-        "valida_hasta": "2026-08-04 14:30"
+        "entrena_hasta": "2026-02-24 12:30",
+        "valida_desde": "2026-02-24 13:30",
+        "valida_hasta": "2026-08-05 13:30"
       }
     ]
   },
   "ar": {
     "p": 1,
-    "intercepto": 9.493048504570689e-05,
+    "intercepto": 9.509051851432977e-05,
     "coeficientes": [
-      0.03221877813908454
+      0.03160232643326896
     ]
   },
   "arima": {
@@ -56,24 +56,24 @@
     "q": 0,
     "nombre": "ARIMA(0,1,0)",
     "escala": 100.0,
-    "constante": 0.009632604234823164,
+    "constante": 0.00963778637965879,
     "ar": [],
     "ma": [],
-    "sigma2": 0.4715602404501831,
-    "aic": 6546.270513376985,
-    "bic": 6558.371920139925,
+    "sigma2": 0.4712166381659392,
+    "aic": 6556.407231486344,
+    "bic": 6568.512461123975,
     "raices_ar": [],
     "raices_ma": [],
     "raices_casi_comunes": false,
     "coeficientes": [
       {
         "parametro": "const",
-        "estimacion": 0.009632604234823164,
-        "error_estandar": 0.012262632801230562,
-        "z": 0.785524967677131,
-        "p_valor": 0.4321458373713434,
-        "ic_bajo": -0.014402156055588738,
-        "ic_alto": 0.03366736452523507,
+        "estimacion": 0.00963778637965879,
+        "error_estandar": 0.012246278999791712,
+        "z": 0.7869971262146414,
+        "p_valor": 0.4312835484487658,
+        "ic_bajo": -0.014364920459932966,
+        "ic_alto": 0.03364049321925054,
         "significativo": false
       }
     ],
@@ -93,41 +93,41 @@
       "ljung_box": [
         {
           "rezagos": 14,
-          "estadistico": 23.216236905430502,
-          "p_valor": 0.05684086035482671
+          "estadistico": 23.05041116016379,
+          "p_valor": 0.05945436625042536
         },
         {
           "rezagos": 21,
-          "estadistico": 57.57100602203589,
-          "p_valor": 2.9563170783643593e-05
+          "estadistico": 57.31002747194376,
+          "p_valor": 3.2324461751330244e-05
         }
       ],
       "jarque_bera": {
-        "estadistico": 120946.45638427627,
+        "estadistico": 121082.21065736127,
         "p_valor": 0.0,
-        "asimetria": -1.3429955126830524,
-        "curtosis": 33.30505053296569
+        "asimetria": -1.342424069482207,
+        "curtosis": 33.29309526861539
       }
     },
     "integracion": [
       {
         "d": 0,
         "serie": "ln(precio)",
-        "estadistico": -1.0806152452917737,
-        "p_valor": 0.7227400931745459,
+        "estadistico": -1.0696574150851148,
+        "p_valor": 0.7270192915287202,
         "rezagos": 20,
-        "n": 3115,
-        "critico_5": -2.862468302843017,
+        "n": 3121,
+        "critico_5": -2.862466517374906,
         "estacionaria": false
       },
       {
         "d": 1,
         "serie": "Δ ln(precio) = log-retorno",
-        "estadistico": -12.874003772602286,
-        "p_valor": 4.812271032789824e-24,
+        "estadistico": -12.888963879667047,
+        "p_valor": 4.490938586266514e-24,
         "rezagos": 19,
-        "n": 3115,
-        "critico_5": -2.862468302843017,
+        "n": 3121,
+        "critico_5": -2.862466517374906,
         "estacionaria": true
       }
     ]
@@ -139,11 +139,11 @@
       "capas": 1,
       "dropout": 0.2,
       "tasa": 0.01,
-      "rmse_cv_pct": 0.704290730578683,
-      "desv_pliegues_pct": 0.12794902703929115,
-      "epocas_promedio": 13.333333333333334,
+      "rmse_cv_pct": 0.7025675623927643,
+      "desv_pliegues_pct": 0.13435468799379,
+      "epocas_promedio": 10.333333333333334,
       "parametros": 4289,
-      "epocas_finales": 13,
+      "epocas_finales": 10,
       "optimizador": "SGD"
     },
     "lstm": {
@@ -151,12 +151,12 @@
       "unidades": 64,
       "capas": 1,
       "dropout": 0.2,
-      "tasa": 0.1,
-      "rmse_cv_pct": 0.7041133763468862,
-      "desv_pliegues_pct": 0.12645580671039636,
-      "epocas_promedio": 15.0,
+      "tasa": 0.01,
+      "rmse_cv_pct": 0.7030424465906887,
+      "desv_pliegues_pct": 0.1325293802118549,
+      "epocas_promedio": 23.666666666666668,
       "parametros": 16961,
-      "epocas_finales": 15,
+      "epocas_finales": 24,
       "optimizador": "SGD"
     }
   },
@@ -165,11 +165,11 @@
     "filtros": 32,
     "tasa": 0.01,
     "dropout": 0.2,
-    "perdida_cv": 0.6922148068745931,
-    "desv_pliegues": 0.0016651314298313671,
-    "acierto_cv_pct": 51.08556946118673,
-    "epocas_promedio": 9.666666666666666,
-    "epocas_finales": 10,
+    "perdida_cv": 0.6924760937690735,
+    "desv_pliegues": 0.0015342914249631139,
+    "acierto_cv_pct": 51.16772751013438,
+    "epocas_promedio": 8.666666666666666,
+    "epocas_finales": 9,
     "optimizador": "SGD",
     "alto": 40,
     "ancho_vela": 4
